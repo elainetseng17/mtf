@@ -98,6 +98,26 @@ canvas.dragging{cursor:grabbing}
 .card .l2 .sl{color:var(--dn)}.card .l2 .tp{color:var(--up)}.card .l2 .en{color:#4da3ff}
 .card .l3{margin-top:5px;font-size:11px;color:var(--mut)}
 .empty{font-size:12px;color:var(--mut);padding:10px 4px;line-height:1.5}
+/* 市場 */
+.mkhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0 4px}
+.mkhead b{font-size:15px}.mkhead span{font-size:11px;color:var(--mut);flex:1;text-align:right}
+.mkhead button{background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
+.mkgrp{margin:14px 0 6px;font-size:12px;color:var(--mut);font-weight:700;letter-spacing:1px}
+.mkgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.mk{background:var(--card);border-radius:10px;padding:9px 10px;border-left:3px solid var(--line);min-width:0}
+.mk.wide{grid-column:1/-1}
+.mk .l{font-size:11px;color:var(--mut)}
+.mk .v{font-size:19px;font-weight:700;margin:2px 0;font-variant-numeric:tabular-nums;word-break:break-all}
+.mk .s{font-size:11px;color:var(--mut);line-height:1.5}
+.mk .n{font-size:12px;margin-top:4px;line-height:1.45}
+.mk.up{border-left-color:var(--up)}.mk.up .v{color:var(--up)}
+.mk.dn{border-left-color:var(--dn)}.mk.dn .v{color:var(--dn)}
+.mk.warn{border-left-color:var(--warn)}.mk.warn .v{color:var(--warn)}
+.mk.info{border-left-color:#4da3ff}.mk.info .v{color:#4da3ff}
+.mk.fail .v{font-size:13px;color:var(--mut);font-weight:400}
+.mk a{color:#4da3ff;text-decoration:none;font-size:13px}
+.mklinks{display:flex;flex-wrap:wrap;gap:6px}
+.mklinks a{background:var(--card);color:#4da3ff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;text-decoration:none}
 </style></head><body>
 <div class="bar">
   <div class="seg" id="exsel"></div>
@@ -105,7 +125,7 @@ canvas.dragging{cursor:grabbing}
 </div>
 <div id="alertbar" class="alertbar" style="display:none"></div>
 <div class="pins" id="pins"></div>
-<div class="tfsel"><span>進場級別</span><span id="tfsel"></span></div>
+<div class="tfsel" id="tfrow"><span>進場級別</span><span id="tfsel"></span></div>
 
 <div id="scanview">
   <div class="scanbar">
@@ -126,6 +146,12 @@ canvas.dragging{cursor:grabbing}
   <div id="near"></div>
 </div>
 
+<div id="marketview" style="display:none">
+  <div class="mkhead"><b>BTC 市場總覽</b><span id="mkstamp">載入中…</span><button id="mkrefresh">重新整理</button></div>
+  <div id="mkbody"></div>
+  <div class="foot">資料:Bybit 公開行情、alternative.me、DefiLlama、Coin Metrics。判讀只是參考,不是交易建議。</div>
+</div>
+
 <div id="monview" style="display:none">
   <div class="symrow"><input id="syminp" placeholder="幣種代號,例如 ETHUSDT" autocomplete="off" spellcheck="false"><button id="symgo">載入</button></div>
   <div class="top"><div><span class="dot" id="dot"></span><b id="sym">--</b><button id="pinbtn" class="pinbtn" style="display:none">☆ 釘選</button></div><div id="clock">--</div></div>
@@ -134,7 +160,7 @@ canvas.dragging{cursor:grabbing}
   <div class="badge" id="badge">載入中…</div>
   <div class="phase" id="phase"></div>
   <div class="basis" id="basis"></div>
-  <div class="cap">各級別目前走勢(只是參考,進場方向以 4h+1d 大趨勢為準)</div>
+  <div class="cap">各級別目前走勢(僅供參考;進場以「主要一波」的 0.5 為準)</div>
   <div class="tfs" id="tfs"></div>
   <div class="box" id="rowsbox" style="display:none"><h4 id="rowstitle"></h4><div id="rows"></div></div>
   <canvas id="chart"></canvas>
@@ -153,7 +179,7 @@ const TF_SEC={'5m':300,'15m':900,'1h':3600,'4h':14400,'1d':86400};
 const WEIGHTS={'5m':0.05,'15m':0.10,'1h':0.20,'4h':0.30,'1d':0.35};
 const SETUP_TFS=['5m','15m','1h','4h'];
 const LONG_TH=25, SHORT_TH=-25;
-const CFG={fib:0.5,tol_atr:0.1,confirm:2,max_retrace:0.786,zz_atr:2.0,min_leg_atr:4.0,
+const CFG={fib:0.5,tol_atr:0.1,confirm:2,max_retrace:0.786,zz_atr:2.0,min_leg_atr:5.0,lookback:200,major_frac:0.9,sub_frac:0.6,trend_filter:false,
            min_risk_atr:1.0,min_rr:1.2,sl_buf:0.2,chase:1.0};
 const ZH={'多':'做多','空':'做空','觀望':'觀望'};
 const CLS={'多':'long','空':'short','觀望':'wait'};
@@ -257,33 +283,17 @@ function zigzag(h,l,thr){
   }
   return [piv,trend,ext];
 }
-function analyzeLong(h,l,c,atrV,cfg){
-  const n=c.length, out={state:'no_leg'};
-  if(n<30||atrV<=0) return out;
-  const [piv,trend,ext]=zigzag(h,l,cfg.zz_atr*atrV);
-  const pts=piv.slice();
-  if(trend===1) pts.push([ext,'H',h[ext]]); else if(trend===-1) pts.push([ext,'L',l[ext]]);
-  const minLeg=cfg.min_leg_atr*atrV, pairs=[];
-  for(let k=1;k<pts.length;k++) if(pts[k][1]==='H'&&pts[k-1][1]==='L'&&pts[k][2]-pts[k-1][2]>=minLeg) pairs.push([pts[k-1],pts[k]]);
-  let leg=null;
-  for(const [lp,hp] of pairs){
-    if(leg===null) leg=lp;
-    else {
-      const sl=h.slice(leg[0],lp[0]);
-      if(hp[2]>(sl.length?maxOf(sl):0)||lp[2]<=leg[2]) leg=lp;
-    }
-  }
-  if(leg===null) return out;
-  const iL=leg[0], L=leg[2], segH=h.slice(iL), H=maxOf(segH), iH=iL+segH.indexOf(H);
-  const rng=H-L, fib=H-cfg.fib*rng, deep=H-cfg.max_retrace*rng, tol=cfg.tol_atr*atrV;
+function evalLeg(h,l,c,atrV,cfg,piv,iL){
+  const n=c.length, L=l[iL], segH=h.slice(iL), H=maxOf(segH), iH=iL+segH.indexOf(H);
+  const out={state:'wait'}, rng=H-L, fib=H-cfg.fib*rng, deep=H-cfg.max_retrace*rng, tol=cfg.tol_atr*atrV;
   Object.assign(out,{leg_start:L,leg_end:H,leg_start_i:iL,leg_end_i:iH,fib});
-  if(iH>=n-1){ out.state='wait'; return out; }
+  if(iH>=n-1) return out;
   const pbLow=minOf(l.slice(iH+1));
   out.pb_extreme=pbLow;
   if(pbLow<=L||pbLow<deep){ out.state='invalid'; return out; }
   let touch=null;
   for(let i=iH+1;i<n;i++) if(l[i]<=fib+tol){ touch=i; break; }
-  if(touch===null){ out.state='wait'; return out; }
+  if(touch===null) return out;
   let s=n;
   while(s-1>iH&&c[s-1]>fib) s--;
   s=Math.max(s,touch);
@@ -302,6 +312,30 @@ function analyzeLong(h,l,c,atrV,cfg){
   out.state=rr>=cfg.min_rr?'confirmed':'low_rr';
   return out;
 }
+function analyzeLong(h,l,c,atrV,cfg){
+  const off=Math.max(0,c.length-(cfg.lookback||200));
+  h=h.slice(off); l=l.slice(off); c=c.slice(off);
+  const n=c.length, out={state:'no_leg'};
+  if(n<30||atrV<=0) return out;
+  const [piv,trend,ext]=zigzag(h,l,cfg.zz_atr*atrV);
+  const pts=piv.slice();
+  if(trend===1) pts.push([ext,'H',h[ext]]); else if(trend===-1) pts.push([ext,'L',l[ext]]);
+  const minLeg=cfg.min_leg_atr*atrV, starts=[];
+  for(let k=1;k<pts.length;k++)
+    if(pts[k][1]==='H'&&pts[k-1][1]==='L'&&pts[k][2]-pts[k-1][2]>=minLeg&&!starts.includes(pts[k-1][0])) starts.push(pts[k-1][0]);
+  if(!starts.length) return out;
+  const cands=starts.map(iL=>evalLeg(h,l,c,atrV,cfg,piv,iL));
+  const size=o=>o.leg_end-o.leg_start;
+  const valid=cands.filter(o=>o.state!=='invalid');
+  let best;
+  if(valid.length){
+    const top=Math.max(...valid.map(size));
+    const major=valid.filter(o=>size(o)>=(cfg.major_frac||0.9)*top);
+    best=major.reduce((a,b)=>b.leg_start_i>a.leg_start_i?b:a);
+  } else best=cands.reduce((a,b)=>size(b)>size(a)?b:a);
+  best.leg_start_i+=off; best.leg_end_i+=off;
+  return best;
+}
 function analyzeShort(h,l,c,atrV,cfg){
   const out=analyzeLong(l.map(x=>-x),h.map(x=>-x),c.map(x=>-x),atrV,cfg);
   for(const k of PRICE_KEYS) if(out[k]!=null) out[k]=-out[k];
@@ -310,24 +344,13 @@ function analyzeShort(h,l,c,atrV,cfg){
 
 /* ---------- 整理成要顯示的內容 ---------- */
 const fp=x=>fmt(x);
-function makeView(results,setups,tf,price,cfg){
-  const [,,bias]=decide(results);
-  const view={bias:ZH[bias],
-    tfs:TIMEFRAMES.filter(t=>results[t]).map(t=>({tf:t,dir:TRD[labelOf(results[t][0])],cls:CLS[labelOf(results[t][0])]})),
-    action:'觀望',cls:'wait',phase:'',rows_title:'',rows:[],lines:[],leg:null,side:null,basis:''};
-  if(bias==='觀望'){
-    view.phase='大級別(4h+1d)方向不明,先不操作';
-    view.basis='4h+1d 大趨勢不明 → 先不操作';
-    return view;
-  }
-  const side=bias==='多'?'long':'short', sw=SIDE[side], dirn=side==='long'?1:-1;
-  const opp=side==='long'?'空':'多';
-  const su=setups[tf], s=su[side], atrV=su.atr, st=s.state;
-  view.side=side;
-  const K=cfg.confirm;
-  view.basis='4h+1d 大趨勢'+TRD[bias]+' → 只找'+sw.action+'機會;小級別的'+(side==='long'?'下跌':'上漲')+'視為'+sw.pb;
+function biasOf(results){ try{ return decide(results)[2]; }catch(e){ return null; } }
+function sideView(results,setups,tf,price,cfg,side){
+  const sw=SIDE[side], dirn=side==='long'?1:-1, opp=side==='long'?'空':'多';
+  const su=setups[tf], s=su[side], atrV=su.atr, st=s.state, K=cfg.confirm;
+  const view={action:'觀望',cls:'wait',phase:'',rows_title:'',rows:[],lines:[],leg:null,side};
   if(st==='no_leg') view.phase='尚未形成清楚的一波'+sw.leg+',先觀望';
-  else if(st==='wait') view.phase='觀察中:前一波'+sw.leg+' '+fp(s.leg_start)+'→'+fp(s.leg_end)+',等待'+sw.pb+'到 0.5('+fp(s.fib)+')';
+  else if(st==='wait') view.phase='觀察中:主要一波'+sw.leg+' '+fp(s.leg_start)+'→'+fp(s.leg_end)+',等待'+sw.pb+'到 0.5('+fp(s.fib)+')';
   else if(st==='testing'){
     if(s.run===0) view.phase=sw.pb+' 0.5 中:收盤還在 '+fp(s.fib)+' '+sw.below+',等待確認'+sw.hold;
     else view.phase=sw.held+',再等 '+(K-s.run)+' 根收盤確認'+sw.hold;
@@ -341,7 +364,7 @@ function makeView(results,setups,tf,price,cfg){
     else if(dirn*(price-s.entry)>cfg.chase*atrV||dirn*(s.tp1-price)/riskLive<cfg.min_rr)
       view.phase=sw.confirmed+',但現價離進場價太遠(盈虧比已變差),不追,等下一次'+sw.pb;
     else {
-      view.action=sw.action; view.cls=CLS[bias];
+      view.action=sw.action; view.cls=side==='long'?'long':'short';
       view.phase=sw.confirmed+',可進場'+sw.action;
       if(results['1h']&&tf!=='1h'&&labelOf(results['1h'][0])===opp) view.phase+='(注意:1h 仍偏'+opp+')';
     }
@@ -368,6 +391,47 @@ function makeView(results,setups,tf,price,cfg){
     view.rows_title='關注價位';
     view.rows=[{l:sw.pb+'位 0.5',v:fp(s.fib),n:'',c:'fib'},{l:'止盈',v:fp(s.leg_end),n:'',c:'tp'},
                {l:'止損('+sw.cross+'即放棄)',v:fp(s.leg_start),n:'',c:'sl'}];
+  }
+  return view;
+}
+function rankOf(view,s){
+  if(view.action==='做多'||view.action==='做空') return 4;
+  return {testing:3,confirmed:2,wait:1}[s.state]||0;
+}
+function makeView(results,setups,tf,price,cfg){
+  const bias=biasOf(results);
+  const view={bias:bias?ZH[bias]:'--',
+    tfs:TIMEFRAMES.filter(t=>results[t]).map(t=>({tf:t,dir:TRD[labelOf(results[t][0])],cls:CLS[labelOf(results[t][0])]})),
+    action:'觀望',cls:'wait',phase:'',rows_title:'',rows:[],lines:[],leg:null,side:null,basis:''};
+  let sides=['long','short'];
+  if(cfg.trend_filter){
+    if(bias==='觀望'){ view.phase='大級別(4h+1d)方向不明,先不操作'; view.basis='4h+1d 大趨勢不明 → 先不操作'; return view; }
+    if(bias==='多'||bias==='空') sides=[bias==='多'?'long':'short'];
+  }
+  const cand={}; for(const sd of sides) cand[sd]=sideView(results,setups,tf,price,cfg,sd);
+  const aligned={long:'多',short:'空'}, size={};
+  for(const sd of sides){ const s=setups[tf][sd]; size[sd]=(s.state==='no_leg'||s.state==='invalid')?0:Math.abs(s.leg_end-s.leg_start); }
+  const big=Math.max(...sides.map(sd=>size[sd]));
+  const demoted=new Set(sides.filter(sd=>big>0&&size[sd]>0&&size[sd]<(cfg.sub_frac||0.6)*big));
+  for(const sd of demoted) cand[sd]=Object.assign({},cand[sd],{action:'觀望',cls:'wait',rows:[],rows_title:'',lines:[],leg:null,phase:'這只是較小的波動,先以主要一波為準'});
+  const key=sd=>[demoted.has(sd)?-1:rankOf(cand[sd],setups[tf][sd]),size[sd],aligned[sd]===bias?1:0,
+                 setups[tf][sd].leg_end_i!=null?setups[tf][sd].leg_end_i:-1,sd==='long'?1:0];
+  const cmp=(a,b)=>{ const ka=key(a), kb=key(b); for(let i=0;i<ka.length;i++){ if(ka[i]!==kb[i]) return ka[i]>kb[i]?1:-1; } return 0; };
+  let best=sides.reduce((a,b)=>cmp(b,a)>0?b:a);
+  let sv=cand[best];
+  if(rankOf(sv,setups[tf][best])===0&&sides.length===2){
+    const other=best==='long'?'short':'long';
+    if(setups[tf][best].state==='no_leg'&&setups[tf][other].state!=='no_leg'){ best=other; sv=cand[other]; }
+    else if(setups[tf].long.state==='no_leg'&&setups[tf].short.state==='no_leg')
+      sv=Object.assign({},sv,{side:null,phase:'最近沒有清楚的主要波段,先觀望',lines:[],leg:null,rows:[],rows_title:''});
+  }
+  for(const k of ['action','cls','phase','rows_title','rows','lines','leg','side']) view[k]=sv[k];
+  const sd=view.side;
+  if(bias==='觀望') view.basis='4h+1d 大趨勢不明';
+  else if(bias&&sd){
+    const same=aligned[sd]===bias;
+    view.basis=same?'4h+1d 大趨勢'+TRD[bias]+' · 與'+SIDE[sd].action+'同向(順勢)'
+                   :'4h+1d 大趨勢'+TRD[bias]+' · '+SIDE[sd].action+'屬逆大趨勢(風險較高,請自行評估)';
   }
   return view;
 }
@@ -573,19 +637,23 @@ function scanSnapshot(){
 function scanFail(gen,msg){ if(gen===Scan.gen){ Object.assign(Scan.s,{status:'error',error:msg,finished:nowSec()}); Scan.gen++; } }
 async function scanOne(gen,ex,x,tf){
   if(gen!==Scan.gen) return ['skip',null];
-  const sym=x.symbol;
-  const d1=await getK(ex,sym,'1d',600), d4=await getK(ex,sym,'4h',600);
-  const c1=closedArrays(d1), c4=closedArrays(d4);
-  if(c1[3].length<MIN_BARS||c4[3].length<MIN_BARS) return ['skip',null];
-  const results={'1d':scoreTimeframe(...c1),'4h':scoreTimeframe(...c4)};
-  if(decide(results)[2]==='觀望') return ['none',null];
-  const de=tf==='4h'?d4:await ex.klines(sym,tf);
+  const sym=x.symbol; let results={};
+  if(CFG.trend_filter){
+    const d1=await getK(ex,sym,'1d',600), d4=await getK(ex,sym,'4h',600);
+    const c1=closedArrays(d1), c4=closedArrays(d4);
+    if(c1[3].length<MIN_BARS||c4[3].length<MIN_BARS) return ['skip',null];
+    results={'1d':scoreTimeframe(...c1),'4h':scoreTimeframe(...c4)};
+    if(decide(results)[2]==='觀望') return ['none',null];
+  }
+  const de=(tf==='4h'||tf==='1d')?await getK(ex,sym,tf,600):await ex.klines(sym,tf);
   const ce=closedArrays(de);
   if(ce[3].length<MIN_BARS) return ['skip',null];
   if(!results[tf]) results[tf]=scoreTimeframe(...ce);
   const atrV=results[tf][1].atr;
   const setups={[tf]:{long:analyzeLong(ce[1],ce[2],ce[3],atrV,CFG),short:analyzeShort(ce[1],ce[2],ce[3],atrV,CFG),atr:atrV}};
-  const price=x.price, view=makeView(results,setups,tf,price,CFG), side=view.side, s=setups[tf][side];
+  const price=x.price, view=makeView(results,setups,tf,price,CFG), side=view.side;
+  if(!side) return ['none',null];
+  const s=setups[tf][side];
   const rec={symbol:sym,side,price,chg:x.chg,turnover:x.turnover,state:s.state,phase:view.phase};
   if(view.action==='做多'||view.action==='做空'){
     try{
@@ -756,12 +824,66 @@ async function checkConn(){
   return out;
 }
 
+/* ---------- 市場總覽(BTC):和 mtf_signal.py 的 market_fetch 同一份資料格式 ---------- */
+const EXT=QS.get('ext');
+const extBase=(name,def)=>EXT?EXT.replace(/\/$/,'')+'/'+name:def;
+function swingStruct(piv){
+  const hs=piv.filter(p=>p[1]==='H').map(p=>p[2]).slice(-2), ls=piv.filter(p=>p[1]==='L').map(p=>p[2]).slice(-2);
+  if(hs.length<2||ls.length<2) return '波段不足';
+  if(hs[1]>hs[0]&&ls[1]>ls[0]) return '高低點墊高';
+  if(hs[1]<hs[0]&&ls[1]<ls[0]) return '高低點下移';
+  return '高低點混合(盤整)';
+}
+function techOne(d){
+  const [o,h,l,c]=closedArrays(d), [sc,info]=scoreTimeframe(o,h,l,c), price=c[c.length-1];
+  const e20=ema(c,20).slice(-1)[0], e50=ema(c,50).slice(-1)[0];
+  const e200=c.length>=200?ema(c,200).slice(-1)[0]:ema(c,100).slice(-1)[0];
+  const [piv]=zigzag(h,l,2*info.atr);
+  const ups=piv.filter(p=>p[1]==='H'&&p[2]>price).map(p=>p[2]), dns=piv.filter(p=>p[1]==='L'&&p[2]<price).map(p=>p[2]);
+  return {score:Math.round(sc),label:TRD[labelOf(sc)],price,e20,e50,e200,e200_is100:c.length<200,rsi:info.rsi,adx:info.adx,
+          struct:swingStruct(piv),res:ups.length?minOf(ups):null,sup:dns.length?maxOf(dns):null};
+}
+async function stableSeries(id){
+  const arr=await httpJson(extBase('llama','https://stablecoins.llama.fi')+'/stablecoincharts/all?stablecoin='+id,null,2), out=[];
+  for(const p of arr.slice(-45)){
+    const v=(p.totalCirculatingUSD||p.totalCirculating||{}).peggedUSD;
+    if(v!=null) out.push([parseInt(p.date),parseFloat(v)]);
+  }
+  return out;
+}
+const MKT={t:0,d:null,p:null};
+async function marketFetch(){
+  if(MKT.d&&Date.now()-MKT.t<45000) return MKT.d;
+  if(MKT.p) return MKT.p;
+  MKT.p=(async()=>{
+    const sym='BTCUSDT', cm=extBase('cm','https://community-api.coinmetrics.io'), fng=extBase('fng','https://api.alternative.me');
+    const B=BYBIT, q=(path,p)=>B.get(path,p);
+    const tasks={
+      ticker:async()=>(await q('/v5/market/tickers',{category:'linear',symbol:sym})).result.list[0],
+      oi:async()=>(await q('/v5/market/open-interest',{category:'linear',symbol:sym,intervalTime:'1h',limit:48})).result.list,
+      ratio:async()=>(await q('/v5/market/account-ratio',{category:'linear',symbol:sym,period:'1h',limit:24})).result.list,
+      funding:async()=>(await q('/v5/market/funding/history',{category:'linear',symbol:sym,limit:10})).result.list,
+      tech:async()=>{ const [d1,d4]=await Promise.all([B.klines(sym,'1d'),B.klines(sym,'4h')]); return {d1:techOne(d1),h4:techOne(d4)}; },
+      fng:async()=>(await httpJson(fng+'/fng/?limit=8',null,2)).data,
+      usdt:()=>stableSeries(1), usdc:()=>stableSeries(2),
+      mvrv:async()=>{ const p=await httpJson(cm+'/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=3&paging_from=end',null,2);
+        return p.data.filter(r=>r.CapMVRVCur).map(r=>({t:r.time,v:parseFloat(r.CapMVRVCur)})); }
+    };
+    const out={ts:Date.now(),errors:{}};
+    await Promise.all(Object.keys(tasks).map(async k=>{
+      try{ out[k]=await tasks[k](); }catch(e){ out[k]=null; out.errors[k]=String(errMsg(e)).slice(0,160); }
+    }));
+    MKT.d=out; MKT.t=Date.now(); return out;
+  })();
+  try{ return await MKT.p; } finally{ MKT.p=null; }
+}
+
 /* ===== 介面 ===== */
 
 const $=id=>document.getElementById(id);
 const EXS=[{key:'bybit',name:'Bybit'},{key:'bitunix',name:'Bitunix'}];
 const TFS=['5m','15m','1h','4h'];
-let EX=Core.ex, tab='scan', curTf=LS.get('mtf_tf','15m'), lastPrice=null, flashT=null, lastState=null;
+let prevTab='scan', EX=Core.ex, tab='scan', curTf=LS.get('mtf_tf','15m'), lastPrice=null, flashT=null, lastState=null;
 let scanS=null, lastStart=0, curSym=null;
 const COL={fib:'#f0a020',entry:'#4da3ff',sl:'#ea3943',tp:'#16c784',cur:'#e8eaed'};
 const VIEW={count:80, shift:0, anchorT:null, yLo:null, yHi:null, lastLo:null, lastHi:null};   /* yLo/yHi=手動價格範圍(null=自動) */   /* count=畫面顯示幾根;shift=往回捲了幾根(0=最新) */
@@ -791,12 +913,21 @@ function stamp(t,withDate){
 function exName(k){ const e=EXS.find(x=>x.key===k); return e ? e.name : k; }
 
 /* ---------- 交易所 / 級別 / 分頁 ---------- */
+function exChanged(){ LS.set('mtf_ex',EX); }
 function mkExButtons(){
   const box=$('exsel'); box.textContent='';
+  const mb=mk('button', tab==='market'?'on':'', '市場');
+  mb.onclick=()=>{ if(tab!=='market') setTab('market'); };
+  box.appendChild(mb);
   EXS.forEach(e=>{
-    const b=mk('button', e.key===EX?'on':'', e.name);
-    b.onclick=()=>{ if(EX===e.key) return; EX=e.key; LS.set('mtf_ex',EX); mkExButtons(); pollPins();
-      if(tab==='scan') startScan(); else if(curSym) openSym(curSym); };
+    const b=mk('button', (tab!=='market' && e.key===EX)?'on':'', e.name);
+    b.onclick=()=>{
+      const fromMkt=(tab==='market');
+      if(!fromMkt && EX===e.key) return;
+      EX=e.key; exChanged(); pollPins();
+      if(fromMkt) setTab(prevTab);
+      else if(tab==='scan') startScan(); else if(curSym) openSym(curSym);
+    };
     box.appendChild(b);
   });
 }
@@ -865,17 +996,153 @@ function paintPinBtn(){
   b.style.display='inline-block'; b.textContent=on?'★ 已釘選':'☆ 釘選'; b.className='pinbtn'+(on?' on':'');
 }
 function setTab(t){
-  tab=t;
+  tab=t; if(t!=='market') prevTab=t;
   $('scanview').style.display = t==='scan' ? 'block' : 'none';
   $('monview').style.display = t==='monitor' ? 'block' : 'none';
-  document.querySelectorAll('#tabs button').forEach(b=>{ b.className = b.dataset.tab===t ? 'on' : ''; });
+  $('marketview').style.display = t==='market' ? 'block' : 'none';
+  $('tfrow').style.display = t==='market' ? 'none' : 'flex';
+  document.querySelectorAll('#tabs button').forEach(b=>{ b.className = (t!=='market' && b.dataset.tab===t) ? 'on' : ''; });
+  mkExButtons();
   $('err').textContent=''; paintTf();
-  if(t==='scan'){ pollScan(); if(!scanS || scanS.status==='idle' || scanS.ex!==EX || scanS.tf!==curTf) startScan(); } else { tick(); }
+  if(t==='scan'){ pollScan(); if(!scanS || scanS.status==='idle' || scanS.ex!==EX || scanS.tf!==curTf) startScan(); }
+  else if(t==='monitor'){ tick(); }
+  else { loadMarket(false); }
 }
 function openSym(sym){
   Core.select(EX,sym);
   curSym=sym; resetView(); lastState=null; lastPrice=null; setTab('monitor');
 }
+
+/* ---------- 市場(BTC) ---------- */
+let mktAt=0, mktBusy=false;
+async function fetchMarketRaw(){ return await marketFetch(); }
+const MK_LINKS={
+  etf:[['現貨 ETF 每日淨流入(Farside)','https://farside.co.uk/btc/'],['ETF 資金流(SoSoValue)','https://sosovalue.com/assets/etf/us-btc-spot']],
+  liq:[['爆倉熱力圖(Coinglass)','https://www.coinglass.com/pro/futures/LiquidationHeatMap'],['全網資金費率 / OI(Coinglass)','https://www.coinglass.com/FundingRate']],
+  chain:[['交易所餘額(CryptoQuant)','https://cryptoquant.com/asset/btc/chart/exchange-flows/exchange-reserve'],['MVRV 圖表(Bitcoin Magazine Pro)','https://www.bitcoinmagazinepro.com/charts/mvrv-zscore/']],
+  macro:[['經濟數據日曆 CPI / 非農','https://www.investing.com/economic-calendar/'],['FOMC 會議日程','https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm'],
+         ['美元指數 DXY','https://www.tradingview.com/symbols/TVC-DXY/'],['美債 10 年殖利率','https://www.tradingview.com/symbols/TVC-US10Y/'],['納斯達克指數','https://www.tradingview.com/symbols/NASDAQ-IXIC/']]
+};
+const FNG_ZH={'Extreme Fear':'極度恐懼','Fear':'恐懼','Neutral':'中性','Greed':'貪婪','Extreme Greed':'極度貪婪'};
+function mkCard(label,value,sub,note,tone,wide){
+  const c=mk('div','mk '+(tone||'')+(wide?' wide':''));
+  c.appendChild(mk('div','l',label));
+  c.appendChild(mk('div','v',value));
+  if(sub) c.appendChild(mk('div','s',sub));
+  if(note) c.appendChild(mk('div','n',note));
+  return c;
+}
+function mkFail(label,msg){ const c=mkCard(label,'取得失敗','',msg||'',''); c.classList.add('fail'); return c; }
+function mkLinks(list){
+  const box=mk('div','mklinks');
+  list.forEach(x=>{ const a=mk('a','',x[0]); a.href=x[1]; a.target='_blank'; a.rel='noopener'; box.appendChild(a); });
+  return box;
+}
+function techCard(label,t){
+  const arr=[['20',t.e20],['50',t.e50],['200',t.e200]];
+  const above=arr.filter(x=>t.price>=x[1]).map(x=>x[0]), below=arr.filter(x=>t.price<x[1]).map(x=>x[0]);
+  const unit=(label.indexOf('日線')>=0)?' 日均線':' 根均線';
+  const pos=(above.length?'站上 '+above.join('/'):'')+(above.length&&below.length?';':'')+(below.length?'跌破 '+below.join('/'):'')+unit;
+  let sub=pos+(t.e200_is100?'(200 以 100 代替)':'')+' · '+t.struct+' · RSI '+t.rsi.toFixed(0)+' · ADX '+t.adx.toFixed(0);
+  let note='';
+  if(t.res!=null||t.sup!=null) note='最近壓力 '+(t.res!=null?fmt(t.res):'--')+' · 最近支撐 '+(t.sup!=null?fmt(t.sup):'--');
+  const tone=t.label==='偏多'?'up':t.label==='偏空'?'dn':'';
+  return mkCard(label,t.label+'('+(t.score>=0?'+':'')+t.score+')',sub,note,tone,true);
+}
+function renderMarket(raw){
+  const body=$('mkbody'); body.textContent='';
+  const err=raw.errors||{};
+  const grp=(title)=>{ body.appendChild(mk('div','mkgrp',title)); const g=mk('div','mkgrid'); body.appendChild(g); return g; };
+
+  let g=grp('技術面與趨勢(BTCUSDT)');
+  if(raw.tech){ g.appendChild(techCard('日線 D1 趨勢',raw.tech.d1)); g.appendChild(techCard('4 小時 H4 趨勢',raw.tech.h4)); }
+  else g.appendChild(mkFail('趨勢',err.tech));
+
+  g=grp('衍生品(短線多空情緒)');
+  const tk=raw.ticker;
+  if(tk){
+    const f=parseFloat(tk.fundingRate)*100, chg=parseFloat(tk.price24hPcnt)*100;
+    let tone='', note='';
+    if(f>=0.05){ tone='dn'; note='過熱:做多槓桿極度擁擠,留意多頭連環清算(向下插針)'; }
+    else if(f>=0.03){ tone='warn'; note='偏高:多方開始擁擠,追高要小心'; }
+    else if(f<0){ tone='warn'; note=chg>0?'價格上漲但費率為負:散戶逆勢做空,容易軋空':'費率為負:空方付費給多方'; }
+    else note='正常範圍(約 0.01% 左右)';
+    let sub='每 8 小時結算'; 
+    if(raw.funding&&raw.funding.length){ const avg=raw.funding.reduce((a,x)=>a+parseFloat(x.fundingRate),0)/raw.funding.length*100; sub+=' · 近 '+raw.funding.length+' 次平均 '+avg.toFixed(4)+'%'; }
+    g.appendChild(mkCard('資金費率',f.toFixed(4)+'%',sub,note,tone,false));
+    let oiTxt='--', oiSub='', oiNote='', oiTone='', oiChg=null;
+    const oiv=parseFloat(tk.openInterestValue);
+    if(isFinite(oiv)) oiTxt=fmtUsd(oiv);
+    if(raw.oi&&raw.oi.length>24){ oiChg=(parseFloat(raw.oi[0].openInterest)/parseFloat(raw.oi[24].openInterest)-1)*100; oiSub='24 小時變化 '+pct(oiChg,1); }
+    if(oiChg!=null){
+      if(Math.abs(chg)<2&&oiChg>=5){ oiTone='warn'; oiNote='幣價橫盤 + OI 急增:多空積蓄籌碼,留意大級別變盤'; }
+      else if(chg>=2&&oiChg>=5) oiNote='價漲 + OI 增:新多單進場,趨勢較有力(同時看費率是否過熱)';
+      else if(chg>=2&&oiChg<=-5) oiNote='價漲 + OI 減:偏空單回補,追價力道較弱';
+      else if(chg<=-2&&oiChg>=5) oiNote='價跌 + OI 增:新空單進場,空方積極';
+      else if(chg<=-2&&oiChg<=-5) oiNote='價跌 + OI 減:多單停損離場,留意是否止跌';
+      else oiNote='OI 變化不大';
+    }
+    g.appendChild(mkCard('未平倉量 OI',oiTxt,oiSub+(oiSub?' · ':'')+'24h 價格 '+pct(chg,2),oiNote,oiTone,false));
+  } else { g.appendChild(mkFail('資金費率',err.ticker)); g.appendChild(mkFail('未平倉量 OI',err.ticker)); }
+  if(raw.ratio&&raw.ratio.length){
+    const b=parseFloat(raw.ratio[0].buyRatio)*100, se=parseFloat(raw.ratio[0].sellRatio)*100;
+    g.appendChild(mkCard('多空帳戶比(Bybit)','多 '+b.toFixed(0)+'% / 空 '+se.toFixed(0)+'%','最近 1 小時',b>=60?'多方帳戶偏擁擠':se>=60?'空方帳戶偏擁擠':'',b>=60?'warn':se>=60?'warn':'',true));
+  } else g.appendChild(mkFail('多空帳戶比',err.ratio));
+  const lq=mk('div','mk wide'); lq.appendChild(mk('div','l','清算熱力圖 / 全網合約數據(沒有免費公開資料,請點連結)')); lq.appendChild(mkLinks(MK_LINKS.liq)); g.appendChild(lq);
+
+  g=grp('資金流動');
+  const st=(a,b)=>{ if(!a||!b) return null; const n=Math.min(a.length,b.length); const o=[]; for(let i=0;i<n;i++) o.push([a[a.length-n+i][0],a[a.length-n+i][1]+b[b.length-n+i][1]]); return o; };
+  const sum=raw.usdt&&raw.usdc?st(raw.usdt,raw.usdc):(raw.usdt||raw.usdc);
+  if(sum&&sum.length>8){
+    const now=sum[sum.length-1][1], d7=sum[Math.max(0,sum.length-8)][1], d30=sum[Math.max(0,sum.length-31)][1];
+    const c7=(now/d7-1)*100, c30=(now/d30-1)*100;
+    g.appendChild(mkCard('穩定幣市值(USDT+USDC)',fmtUsd(now),'7 日 '+pct(c7,2)+' · 30 日 '+pct(c30,2),
+      c30>0?'持續增加:場外購買力在進場':'近期縮減:場外資金在退出',c30>0?'up':'warn',true));
+  } else g.appendChild(mkFail('穩定幣市值',err.usdt||err.usdc));
+  const et=mk('div','mk wide'); et.appendChild(mk('div','l','現貨 ETF 每日淨流入(IBIT、FBTC…,沒有免費公開資料,請點連結)')); et.appendChild(mkLinks(MK_LINKS.etf)); g.appendChild(et);
+
+  g=grp('市場情緒');
+  if(raw.fng&&raw.fng.length){
+    const v=parseInt(raw.fng[0].value), cls=FNG_ZH[raw.fng[0].value_classification]||raw.fng[0].value_classification;
+    const y=raw.fng[1]?raw.fng[1].value:'--', w=raw.fng[7]?raw.fng[7].value:'--';
+    let tone='', note='';
+    if(v<=20){ tone='info'; note='極度恐懼:歷史上常是階段性低點區(分批布局要自己評估)'; }
+    else if(v>=80){ tone='warn'; note='極度貪婪:留意階段性回調,分批止盈'; }
+    g.appendChild(mkCard('恐懼與貪婪指數',v+' '+cls,'昨日 '+y+' · 7 日前 '+w,note,tone,true));
+  } else g.appendChild(mkFail('恐懼與貪婪指數',err.fng));
+
+  g=grp('鏈上數據');
+  if(raw.mvrv&&raw.mvrv.length){
+    const v=raw.mvrv[raw.mvrv.length-1].v; let tone='', note='介於高估與低估之間';
+    if(v>3.5){ tone='dn'; note='高於 3.5:市場普遍獲利豐厚,接近週期頂部'; }
+    else if(v<1){ tone='info'; note='低於 1:價格低於平均持有成本,極度低估區'; }
+    g.appendChild(mkCard('MVRV 比率',v.toFixed(2),'市價 ÷ 持有者平均成本',note,tone,false));
+  } else g.appendChild(mkFail('MVRV 比率',err.mvrv));
+  const oc=mk('div','mk'); oc.appendChild(mk('div','l','交易所 BTC 餘額(需付費資料,請點連結)')); oc.appendChild(mkLinks(MK_LINKS.chain)); g.appendChild(oc);
+
+  g=grp('宏觀經濟(事件前後波動放大,合約先降槓桿)');
+  const mc=mk('div','mk wide'); mc.appendChild(mk('div','l','CPI / 非農 / 聯準會 / 美元 / 美債 / 納指(請點連結看最新)')); mc.appendChild(mkLinks(MK_LINKS.macro)); g.appendChild(mc);
+}
+function fmtUsd(v){
+  const a=Math.abs(v);
+  if(a>=1e12) return (v/1e12).toFixed(2)+' 兆美元';
+  if(a>=1e8) return (v/1e8).toFixed(1)+' 億美元';
+  return Math.round(v).toLocaleString('en-US')+' 美元';
+}
+function pct(x,d){ return (x>=0?'+':'')+x.toFixed(d==null?2:d)+'%'; }
+async function loadMarket(force){
+  if(mktBusy) return;
+  if(!force && mktAt && Date.now()-mktAt<45000) return;
+  mktBusy=true; $('mkstamp').textContent='更新中…';
+  try{
+    const raw=await fetchMarketRaw();
+    renderMarket(raw); mktAt=Date.now();
+    const n=Object.keys(raw.errors||{}).length;
+    $('mkstamp').textContent='更新 '+stamp(Date.now(),false)+(n?' · '+n+' 項取得失敗':'');
+  }catch(e){ $('mkstamp').textContent='取得失敗:'+(e&&e.message||e); }
+  finally{ mktBusy=false; }
+}
+$('mkrefresh').onclick=()=>loadMarket(true);
 
 /* ---------- 掃描 ---------- */
 function startScan(){
@@ -1173,7 +1440,8 @@ $('syminp').addEventListener('keydown',e=>{ if(e.key==='Enter') $('symgo').click
 document.querySelectorAll('#tabs button').forEach(b=>{ b.onclick=()=>setTab(b.dataset.tab); });
 window.addEventListener('resize',()=>{ if(lastState) drawChart(lastState); });
 mkExButtons(); mkTfButtons(); setTab(tab); pollPins(); setInterval(pollPins,2000);
-setInterval(()=>{ if(tab==='monitor') tick(); else pollScan(); },1000);
+setInterval(()=>{ if(tab==='monitor') tick(); else if(tab==='scan') pollScan(); },1000);
+setInterval(()=>{ if(tab==='market') loadMarket(false); },60000);
 
 /* ---------- 手機用:提醒音/震動、螢幕保持亮著、連線檢查 ---------- */
 let AC=null;
