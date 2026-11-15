@@ -444,8 +444,8 @@ async function httpJson(url,lim,retries=3){
     const ac=new AbortController(), to=setTimeout(()=>ac.abort(),15000);
     try{
       const r=await fetch(url,{signal:ac.signal,cache:'no-store'});
+      if(r.ok){ const j=await r.json(); clearTimeout(to); return j; }   /* 逾時也涵蓋讀取內容,避免卡死 */
       clearTimeout(to);
-      if(r.ok) return await r.json();
       if([429,500,502,503,504].includes(r.status)&&i<retries){ await sleep(600*2**i); continue; }
       if(r.status===403) throw new ExchangeError('交易所拒絕連線(HTTP 403):可能是請求太頻繁被暫時限流,或所在地區受限');
       throw new ExchangeError('HTTP '+r.status);
@@ -684,9 +684,12 @@ const Core={
   }
 };
 let sigLast=0, sigSeen=-1, sigBusy=false, priceBusy=false, pinBusy=false;
+/* 看門狗:任何一個更新卡住超過 60 秒就放掉,避免整個畫面停住 */
+const busySince={sig:0,price:0,pin:0};
+function watch(k,flag){ if(flag){ if(!busySince[k]) busySince[k]=Date.now(); else if(Date.now()-busySince[k]>60000){ busySince[k]=0; return false; } } else busySince[k]=0; return flag; }
 const errMsg=e=>(e&&e.message)||String(e);
 async function signalTick(){
-  if(sigBusy||!Core.symbol) return;
+  if(watch('sig',sigBusy)||!Core.symbol) return;
   const ver=Core.version, sym=Core.symbol, ex=EXCH[Core.ex], now=nowSec();
   if(!(ver!==sigSeen||now-sigLast>=30||Math.floor((now-2)/300)>Math.floor((sigLast-2)/300))) return;
   sigBusy=true;
@@ -699,7 +702,7 @@ async function signalTick(){
   finally{ sigLast=nowSec(); sigSeen=ver; sigBusy=false; }
 }
 async function priceTick(){
-  if(priceBusy||!Core.symbol) return;
+  if(watch('price',priceBusy)||!Core.symbol) return;
   priceBusy=true;
   const ver=Core.version, sym=Core.symbol;
   try{
@@ -714,7 +717,7 @@ async function priceTick(){
 }
 const pinSig={};
 async function pinTick(){
-  if(pinBusy) return; pinBusy=true;
+  if(watch('pin',pinBusy)) return; pinBusy=true;
   try{
     const exk=Core.pinEx, ex=EXCH[exk];
     for(const sym of Core.pins.slice()){
