@@ -118,11 +118,26 @@ canvas.dragging{cursor:grabbing}
 .mk a{color:#4da3ff;text-decoration:none;font-size:13px}
 .mklinks{display:flex;flex-wrap:wrap;gap:6px}
 .mklinks a{background:var(--card);color:#4da3ff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;text-decoration:none}
+.simbtn{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:5px 10px;font-size:13px;cursor:pointer}
+#simmodal{position:fixed;inset:0;background:rgba(0,0,0,.66);z-index:50;display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:12px}
+.simpanel{background:var(--bg);border:1px solid var(--line);border-radius:14px;width:100%;max-width:640px;padding:12px;margin:auto 0}
+.simhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}.simhead b{font-size:16px}.simhead button{margin-left:auto;background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:4px 12px;cursor:pointer}
+.simgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.simgrid label{font-size:12px;color:var(--mut);display:flex;flex-direction:column;gap:3px}
+.simpanel input,.simpanel select{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:14px;min-width:0}
+.simrow{display:flex;gap:6px;align-items:center;margin-top:8px}.simrow span{width:32px;font-size:13px;color:var(--mut)}.simrow input{width:80px}
+.simbtns{display:flex;gap:8px;margin:10px 0}.simbtns button{flex:1;background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:8px;font-size:14px;cursor:pointer}
+.simbtns button:first-child{background:#1d3b2c;border-color:var(--up)}
+.simsum{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:6px 0}.simsum div{background:var(--card);border-radius:8px;padding:6px 8px}.simsum i{display:block;font-size:11px;color:var(--mut);font-style:normal}.simsum b{font-size:14px}
+.simnote{font-size:12px;color:var(--mut);margin-top:8px;line-height:1.5}
+.simcl{display:flex;gap:8px;align-items:center;background:var(--card);border-radius:8px;padding:6px 8px;margin-bottom:4px;font-size:12px}
+.rank{font-size:12px;color:var(--warn);font-weight:600}
 </style></head><body>
 <div class="bar">
   <div class="seg" id="exsel"></div>
   <div class="seg" id="tabs"><button data-tab="scan">掃描</button><button data-tab="monitor">監控</button></div>
+  <button class="simbtn" id="simbtn">💰 模擬交易</button>
 </div>
+<div id="simmodal"><div class="simpanel"><div class="simhead"><b>模擬交易</b><span id="simstate">--</span><button id="simclose">關閉</button></div><div id="simbody"></div></div></div>
 <div id="alertbar" class="alertbar" style="display:none"></div>
 <div class="pins" id="pins"></div>
 <div class="tfsel" id="tfrow"><span>進場級別</span><span id="tfsel"></span></div>
@@ -140,7 +155,7 @@ canvas.dragging{cursor:grabbing}
   <div class="prog"><div id="progbar"></div></div>
   <div class="scanstat" id="scanstat"></div>
   <div class="sec"><div>可進場 <span id="hitn"></span></div>
-    <select id="sortkey"><option value="rr">依盈虧比</option><option value="turnover">依成交額</option></select></div>
+    <select id="sortkey"><option value="rank">綜合排名</option><option value="rr">依盈虧比</option><option value="turnover">依成交額</option></select></div>
   <div id="hits"></div>
   <div class="sec"><div>接近進場 <span>正在 0.5 附近,等確認</span></div></div>
   <div id="near"></div>
@@ -654,7 +669,7 @@ async function scanOne(gen,ex,x,tf){
   const price=x.price, view=makeView(results,setups,tf,price,CFG), side=view.side;
   if(!side) return ['none',null];
   const s=setups[tf][side];
-  const rec={symbol:sym,side,price,chg:x.chg,turnover:x.turnover,state:s.state,phase:view.phase};
+  const rec={symbol:sym,side,price,chg:x.chg,turnover:x.turnover,state:s.state,phase:view.phase,atr:atrV,ts:Math.round(results[tf][0]*(side==='long'?1:-1)*10)/10};
   if(view.action==='做多'||view.action==='做空'){
     try{
       const p2=(await ex.ticker(sym))[0];
@@ -1150,12 +1165,13 @@ function startScan(){
   scanStart(EX,curTf,Number($('minturn').value)); pollScan();
 }
 function pollScan(){ renderScan(scanSnapshot()); }
-function hitCard(r){
+function hitCard(r,i){
   const c=mk('div','card'); c.onclick=()=>openSym(r.symbol);
   const l1=mk('div','l1');
+  if($('sortkey').value==='rank') l1.appendChild(mk('span','rank','#'+(i+1)));
   l1.appendChild(mk('span','chip '+r.side, r.action));
   l1.appendChild(mk('b','',r.symbol));
-  l1.appendChild(mk('span','rr','盈虧比 '+r.rr.toFixed(2)));
+  l1.appendChild(mk('span','rr','評分 '+rankScore(r)+' · 盈虧比 '+r.rr.toFixed(2)));
   c.appendChild(l1);
   const l2=mk('div','l2');
   [['進場',r.entry,'en'],['止損',r.sl,'sl'],['止盈1',r.tp1,'tp']].forEach(x=>{
@@ -1179,7 +1195,7 @@ function nearCard(r){
 function fillList(box,arr,maker,emptyMsg){
   box.textContent='';
   if(!arr.length){ box.appendChild(mk('div','empty',emptyMsg)); return; }
-  arr.forEach(r=>box.appendChild(maker(r)));
+  arr.forEach((r,i)=>box.appendChild(maker(r,i)));
 }
 function renderScan(s){
   scanS=s;
@@ -1193,7 +1209,7 @@ function renderScan(s){
   $('scanstat').textContent=st;
   if(s.status==='done' && s.total && s.failed/s.total>0.2) $('err').textContent='有 '+s.failed+' 個幣種抓取失敗(可能被限流),結果可能不完整,可稍後重新掃描。';
   const key=$('sortkey').value;
-  const hits=s.hits.slice().sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : b.rr-a.rr);
+  const hits=s.hits.slice().sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : key==='rr' ? b.rr-a.rr : rankScore(b)-rankScore(a));
   const near=s.near.slice().sort((a,b)=>b.turnover-a.turnover);
   $('hitn').textContent='('+hits.length+')';
   const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。';
@@ -1442,6 +1458,238 @@ window.addEventListener('resize',()=>{ if(lastState) drawChart(lastState); });
 mkExButtons(); mkTfButtons(); setTab(tab); pollPins(); setInterval(pollPins,2000);
 setInterval(()=>{ if(tab==='monitor') tick(); else if(tab==='scan') pollScan(); },1000);
 setInterval(()=>{ if(tab==='market') loadMarket(false); },60000);
+
+/* ---------- 綜合排名 ---------- */
+function rankParts(r){
+  const atr=r.atr||0;
+  const rr=Math.min(r.rr||0,4)/4*30;
+  const tr=Math.min(Math.max(r.ts==null?0:r.ts,0),100)/100*30;
+  let near=10, easy=10;
+  if(atr>0){
+    near=(1-Math.min(Math.abs(r.price-r.entry)/atr,1))*20;
+    easy=(1-Math.min(Math.abs(r.tp1-r.entry)/atr/6,1))*20;
+  }
+  return {rr:rr,tr:tr,near:near,easy:easy};
+}
+function rankScore(r){ const p=rankParts(r); return Math.round(p.rr+p.tr+p.near+p.easy); }
+
+/* ---------- 模擬交易 ---------- */
+let SIM=null, simBusy=false, simSaveT=null;
+function simDefault(){
+  return {cfg:{capital:1000,lev:10,per:100,fee:0.055,maxPos:5,slMode:'signal',slV:2,slU:'price',tpMode:'tp1',tpV:4,tpU:'price'},
+          cash:1000,pos:[],closed:[],done:{},running:false,nid:1};
+}
+function simNorm(s){
+  const d=simDefault();
+  if(!s||typeof s!=='object') return d;
+  const o=Object.assign({},d,s); o.cfg=Object.assign({},d.cfg,s.cfg||{});
+  if(!Array.isArray(o.pos)) o.pos=[]; if(!Array.isArray(o.closed)) o.closed=[]; if(!o.done||typeof o.done!=='object') o.done={};
+  if(typeof o.cash!=='number'||!isFinite(o.cash)) o.cash=o.cfg.capital;
+  return o;
+}
+const SIMPC={};
+async function simPrices(exk){
+  const h=SIMPC[exk]; if(h&&Date.now()-h.t<3000) return h.m;
+  const m={}; (await EXCH[exk].symbols()).forEach(x=>{ m[x.symbol]=x.price; });
+  SIMPC[exk]={t:Date.now(),m:m}; return m;
+}
+async function simLoadState(){ try{ return JSON.parse(LS.get('mtf_sim','null')); }catch(e){ return null; } }
+function simSaveState(s){ try{ LS.set('mtf_sim',JSON.stringify(s)); }catch(e){} }
+function simSave(){
+  clearTimeout(simSaveT);
+  simSaveT=setTimeout(()=>{ if(SIM) simSaveState(SIM); },300);
+}
+const sgn=p=>p.side==='long'?1:-1;
+function pnlOf(p,price){ return (price-p.entry)*sgn(p)*p.qty; }
+function simEquity(){
+  let e=SIM.cash;
+  SIM.pos.forEach(p=>{ e+=p.margin+pnlOf(p,p.last!=null?p.last:p.entry); });
+  return e;
+}
+function pctToPrice(v,u,lev){ return (u==='roe'?v/lev:v)/100; }
+function simOpen(r,price,exk){
+  const c=SIM.cfg, long=r.side==='long';
+  if(SIM.cash<c.per) return false;
+  let sl,tp;
+  if(c.slMode==='signal') sl=r.sl; else sl=price*(long?1-pctToPrice(c.slV,c.slU,c.lev):1+pctToPrice(c.slV,c.slU,c.lev));
+  if(c.tpMode==='tp1') tp=r.tp1; else if(c.tpMode==='tp2') tp=r.tp2;
+  else tp=price*(long?1+pctToPrice(c.tpV,c.tpU,c.lev):1-pctToPrice(c.tpV,c.tpU,c.lev));
+  if(!(isFinite(sl)&&isFinite(tp))) return false;
+  if(long ? !(sl<price&&tp>price) : !(sl>price&&tp<price)) return false;
+  const qty=c.per*c.lev/price, feeO=price*qty*c.fee/100;
+  const liq=long ? price*(1-1/c.lev+0.005) : price*(1+1/c.lev-0.005);
+  SIM.cash-=c.per+feeO;
+  SIM.pos.push({id:SIM.nid++,ex:exk,sym:r.symbol,side:r.side,tf:r.tf||curTf,entry:price,qty:qty,margin:c.per,lev:c.lev,
+    sl:sl,tp:tp,liq:liq,feeO:feeO,feeR:c.fee,openT:Date.now(),last:price,rr:r.rr,score:rankScore(r)});
+  SIM.done[r.symbol+'|'+r.side+'|'+r.entry]=Date.now();
+  return true;
+}
+function simClose(p,exit,reason){
+  const gross=pnlOf(p,exit), feeC=exit*p.qty*p.feeR/100;
+  let net=gross-p.feeO-feeC, back=p.margin+gross-feeC;
+  if(reason==='liq'||back<0){ back=0; net=-p.margin-p.feeO; }
+  SIM.cash+=back;
+  SIM.pos=SIM.pos.filter(x=>x.id!==p.id);
+  SIM.closed.unshift({sym:p.sym,side:p.side,lev:p.lev,entry:p.entry,exit:exit,pnl:net,margin:p.margin,reason:reason,openT:p.openT,closeT:Date.now()});
+  if(SIM.closed.length>200) SIM.closed.length=200;
+}
+function simCheck(p,price){
+  p.last=price;
+  const long=p.side==='long';
+  if(long ? price<=p.liq : price>=p.liq){ simClose(p,p.liq,'liq'); return; }
+  if(long ? price<=p.sl : price>=p.sl){ simClose(p,price,'sl'); return; }
+  if(long ? price>=p.tp : price<=p.tp){ simClose(p,p.tp,'tp'); return; }
+}
+function simFill(P){
+  const c=SIM.cfg;
+  if(!SIM.running||!scanS||scanS.status!=='done'||(scanS.age!=null&&scanS.age>600)) return;
+  const pr=P[scanS.ex]||{};
+  const ranked=scanS.hits.slice().sort((a,b)=>rankScore(b)-rankScore(a));
+  for(const r of ranked){
+    if(SIM.pos.length>=c.maxPos) break;
+    if(SIM.cash<c.per) break;
+    if(SIM.done[r.symbol+'|'+r.side+'|'+r.entry]) continue;
+    if(SIM.pos.some(p=>p.sym===r.symbol)) continue;
+    const price=pr[r.symbol];
+    if(price==null) continue;
+    if(r.atr>0&&Math.abs(price-r.entry)>r.atr) continue;
+    r.tf=scanS.tf;
+    simOpen(r,price,scanS.ex);
+  }
+}
+async function simTick(){
+  if(!SIM||simBusy) return;
+  simBusy=true;
+  try{
+    if(SIM.running){
+      if(!scanS||scanS.status==='idle'){ if(Date.now()-lastStart>10000) startScan(); }
+      else if(scanS.status==='done'&&scanS.age>180&&Date.now()-lastStart>10000) startScan();
+      if(tab!=='scan') pollScan();
+    }
+    const need=new Set(SIM.pos.map(p=>p.ex));
+    if(SIM.running&&scanS&&scanS.status==='done'&&SIM.pos.length<SIM.cfg.maxPos) need.add(scanS.ex);
+    const P={};
+    for(const k of need){ try{ P[k]=await simPrices(k); }catch(e){} }
+    SIM.pos.slice().forEach(p=>{ const v=(P[p.ex]||{})[p.sym]; if(v!=null) simCheck(p,v); });
+    simFill(P);
+    simSave();
+  }catch(e){}
+  simBusy=false;
+  simRender();
+}
+function simStat(){
+  const cl=SIM.closed, w=cl.filter(x=>x.pnl>0).length;
+  let un=0; SIM.pos.forEach(p=>{ un+=pnlOf(p,p.last!=null?p.last:p.entry); });
+  return {n:cl.length,win:cl.length?w/cl.length*100:0,real:cl.reduce((a,x)=>a+x.pnl,0),un:un};
+}
+const money=v=>(v>=0?'+':'')+v.toFixed(2);
+function paint(el,v){ el.style.color=v>0?'var(--up)':v<0?'var(--dn)':'var(--tx)'; }
+const SIMF=[
+  ['capital','本金 (USDT)',1],['lev','槓桿 (倍)',1],['per','每單保證金 (USDT)',1],['fee','手續費 %/邊',0.001],['maxPos','最多同時持倉',1]
+];
+function simBuild(){
+  const box=$('simbody'); box.textContent='';
+  const g=mk('div','simgrid'); box.appendChild(g);
+  SIMF.forEach(f=>{
+    const l=mk('label','',f[1]); const i=document.createElement('input');
+    i.type='number'; i.step=String(f[2]); i.inputMode='decimal'; i.id='sim_'+f[0];
+    i.onchange=()=>simSetCfg(f[0],i.value); l.appendChild(i); g.appendChild(l);
+  });
+  const mkSel=(id,opts)=>{ const s=document.createElement('select'); s.id=id; opts.forEach(o=>{ const e=document.createElement('option'); e.value=o[0]; e.textContent=o[1]; s.appendChild(e); }); return s; };
+  const mkNum=id=>{ const i=document.createElement('input'); i.type='number'; i.step='0.1'; i.id=id; i.inputMode='decimal'; return i; };
+  const r1=mk('div','simrow'); r1.appendChild(mk('span','','止損'));
+  const sm=mkSel('sim_slMode',[['signal','用訊號的止損'],['custom','自訂']]); const sv=mkNum('sim_slV'); const su=mkSel('sim_slU',[['price','價格 %'],['roe','本金報酬 %']]);
+  r1.appendChild(sm); r1.appendChild(sv); r1.appendChild(su); box.appendChild(r1);
+  const r2=mk('div','simrow'); r2.appendChild(mk('span','','止盈'));
+  const tm=mkSel('sim_tpMode',[['tp1','用訊號止盈1'],['tp2','用訊號止盈2'],['custom','自訂']]); const tv=mkNum('sim_tpV'); const tu=mkSel('sim_tpU',[['price','價格 %'],['roe','本金報酬 %']]);
+  r2.appendChild(tm); r2.appendChild(tv); r2.appendChild(tu); box.appendChild(r2);
+  [['slMode',sm],['slV',sv],['slU',su],['tpMode',tm],['tpV',tv],['tpU',tu]].forEach(x=>{ x[1].onchange=()=>simSetCfg(x[0],x[1].value); });
+  box.appendChild(mk('div','simnote',''));
+  box.lastChild.id='simwarn';
+  const bt=mk('div','simbtns');
+  const b1=mk('button','',''); b1.id='simrun'; b1.onclick=()=>{ SIM.running=!SIM.running; simSave(); simTick(); };
+  const b2=mk('button','','全部平倉'); b2.onclick=()=>{ SIM.pos.slice().forEach(p=>simClose(p,p.last!=null?p.last:p.entry,'manual')); simSave(); simRender(); };
+  const b3=mk('button','','重設'); b3.onclick=()=>{ if(confirm('清除所有模擬持倉與紀錄,資金回到本金?')){ const c=SIM.cfg; SIM=simNorm({cfg:c}); SIM.cash=c.capital; simSave(); simRender(); } };
+  bt.appendChild(b1); bt.appendChild(b2); bt.appendChild(b3); box.appendChild(bt);
+  const sm2=mk('div','simsum'); sm2.id='simsum'; box.appendChild(sm2);
+  const h1=mk('div','sec'); h1.innerHTML='<div>持倉</div>'; box.appendChild(h1);
+  const pl=mk('div',''); pl.id='simpos'; box.appendChild(pl);
+  const h2=mk('div','sec'); h2.innerHTML='<div>已平倉(最近 30 筆)</div>'; box.appendChild(h2);
+  const cl=mk('div',''); cl.id='simclosed'; box.appendChild(cl);
+  box.appendChild(mk('div','simnote','模擬不會真的下單。價格每 5 秒更新一次,可能漏掉瞬間針刺;不含滑價,按手續費與強平估算。依目前掃描的「綜合排名」自動開單,最多同時持倉上限單,有止盈/止損/強平出場才會補單;同一個訊號平倉後不會重複開。'));
+}
+function simSetCfg(k,v){
+  const c=SIM.cfg;
+  if(k==='slMode'||k==='slU'||k==='tpMode'||k==='tpU') c[k]=v;
+  else{
+    let n=Number(v); if(!isFinite(n)||n<=0){ simRender(true); return; }
+    if(k==='lev') n=Math.min(125,Math.max(1,n));
+    if(k==='maxPos') n=Math.min(20,Math.max(1,Math.round(n)));
+    if(k==='capital'){ SIM.cash+=n-c.capital; }
+    c[k]=n;
+  }
+  simSave(); simRender(true);
+}
+function simRender(force){
+  if(!SIM||$('simmodal').style.display==='none') return;
+  const c=SIM.cfg, act=document.activeElement;
+  SIMF.forEach(f=>{ const i=$('sim_'+f[0]); if(i!==act||force) i.value=c[f[0]]; });
+  ['slMode','slU','tpMode','tpU'].forEach(k=>{ const e=$('sim_'+k); if(e!==act||force) e.value=c[k]; });
+  ['slV','tpV'].forEach(k=>{ const e=$('sim_'+k); if(e!==act||force) e.value=c[k]; });
+  $('sim_slV').style.display=c.slMode==='custom'?'':'none'; $('sim_slU').style.display=c.slMode==='custom'?'':'none';
+  $('sim_tpV').style.display=c.tpMode==='custom'?'':'none'; $('sim_tpU').style.display=c.tpMode==='custom'?'':'none';
+  const warns=[];
+  if(c.per*c.maxPos>c.capital) warns.push('每單保證金 × 持倉數('+(c.per*c.maxPos)+')超過本金,後面的單可能開不出來');
+  if(c.slMode==='custom'){ const d=pctToPrice(c.slV,c.slU,c.lev); if(d>=1/c.lev-0.005) warns.push('止損距離大於強平距離,會先被強平'); }
+  $('simwarn').textContent=warns.join(';'); $('simwarn').style.color='var(--warn)';
+  $('simrun').textContent=SIM.running?'⏸ 暫停自動下單':'▶ 開始自動下單';
+  $('simstate').textContent=SIM.running?'運行中':'已暫停';
+  $('simstate').style.color=SIM.running?'var(--up)':'var(--mut)';
+  const eq=simEquity(), st=simStat();
+  const sum=$('simsum'); sum.textContent='';
+  [['權益',eq.toFixed(2),eq-c.capital],['可用資金',SIM.cash.toFixed(2),null],['未實現',money(st.un),st.un],['已實現',money(st.real),st.real],
+   ['報酬率',money((eq-c.capital)/c.capital*100)+'%',eq-c.capital],['交易 / 勝率',st.n+' / '+st.win.toFixed(0)+'%',null]].forEach(x=>{
+    const d=mk('div'); d.appendChild(mk('i','',x[0])); const b=mk('b','',x[1]); if(x[2]!=null) paint(b,x[2]); d.appendChild(b); sum.appendChild(d);
+  });
+  const pl=$('simpos'); pl.textContent='';
+  if(!SIM.pos.length) pl.appendChild(mk('div','empty',SIM.running?'等待掃描結果出現可進場的單…':'目前沒有持倉。按「開始自動下單」。'));
+  SIM.pos.forEach(p=>{
+    const u=pnlOf(p,p.last), pc=u/p.margin*100;
+    const d=mk('div','card'); d.style.cursor='default';
+    const l1=mk('div','l1'); l1.appendChild(mk('span','chip '+p.side,p.side==='long'?'做多':'做空'));
+    l1.appendChild(mk('b','',p.sym)); l1.appendChild(mk('span','rr',p.lev+'x · '+p.tf));
+    d.appendChild(l1);
+    const l2=mk('div','l2');
+    [['開倉',fmt(p.entry),''],['現價',fmt(p.last),''],['止損',fmt(p.sl),'sl'],['止盈',fmt(p.tp),'tp']].forEach(x=>{
+      const e=mk('div'); e.appendChild(mk('i','',x[0])); e.appendChild(mk('span',x[2],x[1])); l2.appendChild(e);
+    });
+    d.appendChild(l2);
+    const l3=mk('div','l3'); const pnl=mk('b','',money(u)+' USDT ('+money(pc)+'%)'); paint(pnl,u);
+    l3.appendChild(pnl); l3.appendChild(document.createTextNode(' · 強平 '+fmt(p.liq)+' · 保證金 '+p.margin));
+    const cb=mk('button','','平倉'); cb.style.cssText='float:right;background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:6px;padding:2px 10px;cursor:pointer';
+    cb.onclick=()=>{ simClose(p,p.last,'manual'); simSave(); simRender(); };
+    l3.appendChild(cb); d.appendChild(l3); pl.appendChild(d);
+  });
+  const cl=$('simclosed'); cl.textContent='';
+  if(!SIM.closed.length) cl.appendChild(mk('div','empty','還沒有平倉紀錄。'));
+  const RS={tp:'止盈',sl:'止損',liq:'強平',manual:'手動'};
+  SIM.closed.slice(0,30).forEach(x=>{
+    const d=mk('div','simcl');
+    d.appendChild(mk('span','chip '+x.side,x.side==='long'?'多':'空'));
+    d.appendChild(mk('b','',x.sym));
+    d.appendChild(mk('span','',(RS[x.reason]||x.reason)+' '+fmt(x.entry)+'→'+fmt(x.exit)));
+    const p=mk('b','',money(x.pnl)); paint(p,x.pnl); p.style.marginLeft='auto'; d.appendChild(p); cl.appendChild(d);
+  });
+}
+function simOpenModal(){ $('simmodal').style.display='flex'; simRender(true); simTick(); }
+async function simInit(){
+  SIM=simNorm(await simLoadState());
+  $('simbtn').onclick=simOpenModal;
+  $('simclose').onclick=()=>{ $('simmodal').style.display='none'; };
+  simBuild(); setInterval(simTick,5000);
+}
+
+simInit();
 
 /* ---------- 手機用:提醒音/震動、螢幕保持亮著、連線檢查 ---------- */
 let AC=null;
