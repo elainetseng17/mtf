@@ -1,0 +1,40 @@
+name: Crypto Signal Automated Scanner
+
+on:
+  schedule:
+    # 每 15 分鐘自動執行一次
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 檢出程式碼
+        uses: actions/checkout@v4
+
+      - name: 2. 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 3. 執行掃描腳本並發送 Discord 推播
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python3 mtf_signal_v3.py --scan --exchange bybit --min-turnover 0 > scan_result.txt
+
+          python3 -c "
+          import os, urllib.request, json
+          webhook_url = os.environ.get('DISCORD_WEBHOOK_URL')
+          if webhook_url and os.path.exists('scan_result.txt'):
+              with open('scan_result.txt', 'r', encoding='utf-8') as f:
+                  content = f.read()
+              if len(content.strip()) > 0:
+                  payload = {'content': '🚨 **【倫家財富自由】最新自動掃描訊號**\n```\n' + content[:1900] + '\n```'}
+                  req = urllib.request.Request(webhook_url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json'})
+                  try:
+                      urllib.request.urlopen(req)
+                  except Exception as e:
+                      print('Discord 推播失敗:', e)
+          "
