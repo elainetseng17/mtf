@@ -13,7 +13,7 @@
 <style>
 :root{--bg:#0f1115;--card:#171a21;--tx:#e8eaed;--mut:#8b93a1;--up:#16c784;--dn:#ea3943;--neu:#4b5563;--warn:#f0a020;--line:#252a33}
 *{box-sizing:border-box}
-body{margin:0 auto;max-width:640px;background:var(--bg);color:var(--tx);font-family:-apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif;padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(18px,env(safe-area-inset-bottom))}
+body{margin:0 auto;max-width:640px;background:var(--bg);color:var(--tx);font-family:-apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif;padding:12px;padding-top:calc(max(20px,env(safe-area-inset-top)) + 28px);padding-bottom:max(24px,env(safe-area-inset-bottom))}
 html{background:var(--bg);-webkit-text-size-adjust:100%}
 .foot button{background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer;margin:4px 3px}
 .foot label{display:inline-flex;align-items:center;gap:4px;margin:4px 6px}
@@ -26,7 +26,7 @@ button{font-family:inherit}
 .tfsel{display:flex;gap:6px;align-items:center;margin:10px 0 8px;font-size:12px;color:var(--mut)}
 .tfsel button{background:var(--card);color:var(--tx);border:1px solid transparent;border-radius:8px;padding:4px 12px;font-size:13px;cursor:pointer}
 .tfsel button.on{border-color:var(--mut);font-weight:700}
-@media (pointer:coarse){body{padding-top:calc(12px + 28px)}}
+@media (pointer:coarse){body{padding-top:calc(max(24px,env(safe-area-inset-top)) + 38px)}}
 .top{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:13px}
 .top b{color:var(--tx);font-size:15px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px}
@@ -126,7 +126,7 @@ canvas.dragging{cursor:grabbing}
 .simbtn{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:5px 10px;font-size:13px;cursor:pointer}
 #simmodal{position:fixed;inset:0;background:rgba(0,0,0,.66);z-index:50;display:none;align-items:flex-start;justify-content:center;overflow:auto;overscroll-behavior:contain;padding:0 12px 12px}
 .simpanel{background:var(--bg);border:1px solid var(--line);border-radius:0 0 14px 14px;width:100%;max-width:640px;padding:0 12px 12px;margin:0}
-.simhead{display:flex;align-items:center;gap:10px;margin-bottom:8px;position:sticky;top:0;z-index:5;background:var(--bg);padding:max(12px,env(safe-area-inset-top)) 0 8px}.simhead b{font-size:16px}.simhead button{margin-left:auto;background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:4px 12px;cursor:pointer}
+.simhead{display:flex;align-items:center;gap:10px;margin-bottom:8px;position:sticky;top:0;z-index:5;background:var(--bg);padding:calc(max(20px,env(safe-area-inset-top)) + 32px) 0 10px}.simhead b{font-size:16px}.simhead button{margin-left:auto;background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:4px 12px;cursor:pointer}
 .simgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.simgrid label{font-size:12px;color:var(--mut);display:flex;flex-direction:column;gap:3px}
 .simpanel input,.simpanel select{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:14px;min-width:0}
 .simrow{display:flex;gap:6px;align-items:center;margin-top:8px}.simrow span{width:32px;font-size:13px;color:var(--mut)}.simrow input{width:80px}
@@ -140,7 +140,7 @@ canvas.dragging{cursor:grabbing}
 .revrow{display:grid;grid-template-columns:1.6fr .6fr .8fr 1fr;gap:6px;font-size:12px;padding:4px 8px;background:var(--card);border-radius:6px;margin-bottom:3px}
 .revhead{color:var(--mut);background:transparent}.revrow.low{opacity:.5}
 .simchk{flex-direction:row!important;align-items:center;gap:4px}.simchk input{width:auto}
-#simk{position:fixed;inset:0;z-index:60;display:none;background:rgba(0,0,0,.82);align-items:flex-start;justify-content:center;overflow:auto;padding:max(12px,env(safe-area-inset-top)) 12px 12px}
+#simk{position:fixed;inset:0;z-index:60;display:none;background:rgba(0,0,0,.82);align-items:flex-start;justify-content:center;overflow:auto;padding:calc(max(20px,env(safe-area-inset-top)) + 36px) 12px 12px}
 .simkp{width:100%;max-width:640px;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:12px}
 #simkc{width:100%;height:320px;display:block;background:var(--card);border-radius:10px;cursor:default}
 #simktf{display:flex;gap:6px;margin:8px 0}#simkleg{font-size:12px;margin-top:8px;line-height:1.7}
@@ -715,7 +715,7 @@ async function scanOne(gen,ex,x,tf){
     }catch(e){}
     const wantDir=side==='long'?'多':'空';
     let allAligned=true;
-    for(const t of TIMEFRAMES){
+    for(const t of ['5m','15m','1h']){
       if(!results[t]){
         const dt=await getK(ex,sym,t,KTTL[t]);
         const ct=closedArrays(dt);
@@ -1220,7 +1220,7 @@ function hitCard(r,i){
   if($('sortkey').value==='rank') l1.appendChild(mk('span','rank','#'+(i+1)));
   l1.appendChild(mk('span','chip '+r.side, r.action));
   l1.appendChild(mk('b','',r.symbol));
-  if(r.allAligned) l1.appendChild(mk('span','rank','★全週期同向'));
+  if(r.allAligned) l1.appendChild(mk('span','rank','★5m~1h同向'));
   l1.appendChild(mk('span','rr','評分 '+rankScore(r)+' · 盈虧比 '+r.rr.toFixed(2)));
   c.appendChild(l1);
   const l2=mk('div','l2');
@@ -1265,13 +1265,13 @@ function renderScan(s){
   const key=$('sortkey').value;
   let hits;
   if(key==='rank'){
-    hits=s.hits.filter(r=>r.allAligned===true).sort((a,b)=>rankScore(b)-rankScore(a)).slice(0,10);
+    hits=s.hits.filter(r=>r.allAligned===true && rankScore(r)>=50).sort((a,b)=>rankScore(b)-rankScore(a));
   } else {
     hits=s.hits.slice().sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : b.rr-a.rr);
   }
   const near=s.near.slice().sort((a,b)=>b.turnover-a.turnover);
-  $('hitn').textContent=key==='rank' ? '('+hits.length+' / 全級別同向前10)' : '('+hits.length+')';
-  const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (key==='rank' ? '目前沒有「5m~1d 全級別同向」的幣種。可切換「依盈虧比」或「依成交額」查看單級別訊號。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
+  $('hitn').textContent=key==='rank' ? '('+hits.length+' / 5m~1h同向且≥50分)' : '('+hits.length+')';
+  const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (key==='rank' ? '目前沒有「5m/15m/1h同向且評分≥50」的幣種。可切換「依盈虧比」或「依成交額」查看單級別訊號。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
   fillList($('hits'),hits,hitCard,none);
   fillList($('near'),near,nearCard,s.status==='running' ? '掃描中…' : '目前沒有。');
   if($('auto').checked && s.status==='done' && s.age>180 && Date.now()-lastStart>10000) startScan();
@@ -1506,8 +1506,7 @@ $('pinbtn').onclick=()=>{
   Core.setPin(curSym,!on);
   pollPins();
 };
-$('minturn').value='1000000';
-if($('minturn').value!=='1000000'){ const o=mk('option','',fmtTurn(Number('1000000'))); o.value='1000000'; $('minturn').appendChild(o); $('minturn').value='1000000'; }
+$('minturn').value='0';
 $('minturn').onchange=()=>{ if(tab==='scan') startScan(); };
 $('sortkey').onchange=()=>{ if(scanS) renderScan(scanS); };
 $('symgo').onclick=()=>{ const v=$('syminp').value.trim(); if(v) openSym(v.toUpperCase()); };
@@ -1540,7 +1539,7 @@ const LEVS={};
 const SL_MODES=[['signal','訊號止損'],['prev','前低(多)/前高(空)'],['pct_price','固定價格 %'],['pct_roe','固定本金報酬 %'],['usdt','固定虧損 USDT']];
 const TP_MODES=[['tp1','訊號止盈1'],['tp2','訊號止盈2'],['prev','前高(多)/前低(空)'],['pct_price','固定價格 %'],['pct_roe','固定本金報酬 %'],['usdt','固定獲利 USDT']];
 function simDefault(){
-  return {cfg:{capital:1000,lev:10,levMax:false,per:100,fee:0.055,maxPos:5,slMode:'signal',slV:2,tpMode:'tp1',tpV:4,minScore:0,minTs:-100},
+  return {cfg:{capital:1000,lev:10,levMax:false,per:100,fee:0.055,maxPos:5,slMode:'signal',slV:2,tpMode:'tp1',tpV:4,minScore:50,minTs:-100},
           cash:1000,pos:[],closed:[],done:{},running:false,nid:1,sid:1,start:Date.now(),history:[],weights:null};
 }
 function simNorm(s){
@@ -1663,7 +1662,7 @@ function simFill(P){
   const c=SIM.cfg;
   if(!SIM.running||!scanS||scanS.status!=='done'||(scanS.age!=null&&scanS.age>600)) return;
   const pr=P[scanS.ex]||{};
-  const ranked=scanS.hits.filter(r=>r.allAligned===true).sort((a,b)=>rankScore(b)-rankScore(a)).slice(0,10);
+  const ranked=scanS.hits.filter(r=>r.allAligned===true && rankScore(r)>=50).sort((a,b)=>rankScore(b)-rankScore(a));
   for(const r of ranked){
     if(SIM.pos.length>=c.maxPos) break;
     if(SIM.cash<c.per) break;
