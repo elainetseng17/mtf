@@ -736,6 +736,7 @@ async function scanRun(gen,exk,tf,minTurn){
   try{ syms=(await ex.symbols()).filter(x=>x.turnover>=minTurn); }
   catch(e){ return scanFail(gen,'取得幣種清單失敗: '+e.message); }
   syms.sort((a,b)=>b.turnover-a.turnover);
+  syms=syms.slice(0,100);
   if(!syms.length) return scanFail(gen,'沒有符合成交額條件的幣種(可以調低最低成交額)');
   if(gen!==Scan.gen) return;
   Scan.s.total=syms.length;
@@ -1265,13 +1266,13 @@ function renderScan(s){
   const key=$('sortkey').value;
   let hits;
   if(key==='rank'){
-    hits=s.hits.filter(r=>r.allAligned===true && rankScore(r)>=50).sort((a,b)=>rankScore(b)-rankScore(a));
+    hits=s.hits.filter(r=>r.allAligned===true && rankScore(r)>=30).sort((a,b)=>rankScore(b)-rankScore(a));
   } else {
     hits=s.hits.slice().sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : b.rr-a.rr);
   }
   const near=s.near.slice().sort((a,b)=>b.turnover-a.turnover);
-  $('hitn').textContent=key==='rank' ? '('+hits.length+' / 5m~1h同向且≥50分)' : '('+hits.length+')';
-  const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (key==='rank' ? '目前沒有「5m/15m/1h同向且評分≥50」的幣種。可切換「依盈虧比」或「依成交額」查看單級別訊號。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
+  $('hitn').textContent=key==='rank' ? '('+hits.length+' / 前100名·5m~1h同向且≥30分)' : '('+hits.length+')';
+  const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (key==='rank' ? '目前前100名中沒有「5m/15m/1h同向且評分≥30」的幣種。可切換「依盈虧比」或「依成交額」查看單級別訊號。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
   fillList($('hits'),hits,hitCard,none);
   fillList($('near'),near,nearCard,s.status==='running' ? '掃描中…' : '目前沒有。');
   if($('auto').checked && s.status==='done' && s.age>180 && Date.now()-lastStart>10000) startScan();
@@ -1690,7 +1691,7 @@ function simFill(P){
   const c=SIM.cfg;
   if(!SIM.running||!scanS||scanS.status!=='done'||(scanS.age!=null&&scanS.age>600)) return;
   const pr=P[scanS.ex]||{};
-  const ranked=scanS.hits.filter(r=>r.allAligned===true && rankScore(r)>=50).sort((a,b)=>rankScore(b)-rankScore(a));
+  const ranked=scanS.hits.filter(r=>r.allAligned===true && rankScore(r)>=30).sort((a,b)=>rankScore(b)-rankScore(a));
   for(const r of ranked){
     if(SIM.pos.length>=c.maxPos) break;
     if(SIM.cash<c.per) break;
