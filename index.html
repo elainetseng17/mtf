@@ -164,6 +164,7 @@ canvas.dragging{cursor:grabbing}
         <option value="1000000">100萬</option><option value="5000000">500萬</option><option value="20000000">2000萬</option>
       </select></label>
     <label><input type="checkbox" id="auto" checked>每3分鐘自動更新</label>
+    <label><input type="checkbox" id="resonly" checked>只看各級別共振的前 <span id="resn">10</span> 名</label>
     <button id="rescan">重新掃描</button>
   </div>
   <div class="prog"><div id="progbar"></div></div>
@@ -713,19 +714,19 @@ async function scanOne(gen,ex,x,tf){
       if(makeView(results,setups,tf,p2,CFG).action!==view.action) return ['none',null];
       rec.price=p2;
     }catch(e){}
-    const wantDir=side==='long'?'多':'空';
-    let allAligned=true;
-    for(const t of ['5m','15m','1h']){
-      if(!results[t]){
-        const dt=await getK(ex,sym,t,KTTL[t]);
-        const ct=closedArrays(dt);
-        if(ct[3].length<MIN_BARS){ allAligned=false; break; }
-        results[t]=scoreTimeframe(...ct);
-      }
-      if(labelOf(results[t][0])!==wantDir) allAligned=false;
+    const tfs={[tf]:Math.round(results[tf][0]*10)/10};
+    for(const t2 of TIMEFRAMES){
+      if(t2===tf) continue;
+      try{
+        const d2=await getK(ex,sym,t2,KTTL[t2]);
+        const c2=closedArrays(d2);
+        if(c2[3].length>=MIN_BARS) tfs[t2]=Math.round(scoreTimeframe(...c2)[0]*10)/10;
+      }catch(e){}
     }
+    const want=side==='long'?'多':'空';
+    const resOk=Object.keys(tfs).length===TIMEFRAMES.length&&Object.values(tfs).every(v=>labelOf(v)===want);
     const pv=pivotLevels(ce[1],ce[2]);
-    Object.assign(rec,{action:view.action,entry:s.entry,sl:s.sl,tp1:s.tp1,tp2:s.tp2,rr:s.rr,pvh:pv[0],pvl:pv[1],allAligned});
+    Object.assign(rec,{action:view.action,entry:s.entry,sl:s.sl,tp1:s.tp1,tp2:s.tp2,rr:s.rr,pvh:pv[0],pvl:pv[1],tfs:tfs,res:resOk,allAligned:resOk});
     return ['hit',rec];
   }
   if(s.state==='testing'){ Object.assign(rec,{fib:s.fib,run:s.run}); return ['near',rec]; }
@@ -1215,13 +1216,44 @@ function startScan(){
   scanStart(EX,curTf,Number($('minturn').value)); pollScan();
 }
 function pollScan(){ renderScan(scanSnapshot()); }
+const WK=['rr','tr','near','easy','res','htf','liq','vol'];
+const WN={rr:'盈虧比',tr:'進場級別趨勢',near:'貼近進場',easy:'好止盈',res:'各級別共振強度',htf:'大級別(4h/1d)趨勢',liq:'流動性',vol:'波動適中'};
+const DEF_W={rr:20,tr:15,near:12,easy:12,res:15,htf:12,liq:6,vol:8};
+let RW=Object.assign({},DEF_W), RESONLY=true, TOPN=10;
+const clamp01=x=>Math.max(0,Math.min(1,x));
+function rankNorm(r){
+  const atr=r.atr||0, sg=r.side==='long'?1:-1;
+  const o={rr:clamp01((r.rr||0)/4),tr:clamp01((r.ts==null?0:r.ts)/100),near:0.5,easy:0.5,res:0.5,htf:0.5,liq:0.5,vol:0.5};
+  if(atr>0&&r.price>0){
+    o.near=1-clamp01(Math.abs(r.price-r.entry)/atr);
+    o.easy=1-clamp01(Math.abs(r.tp1-r.entry)/atr/6);
+    o.vol=1-clamp01(Math.abs(atr/r.price*100-1)/2);
+  }
+  if(r.tfs){
+    const v=Object.keys(r.tfs).map(k=>clamp01(r.tfs[k]*sg/100));
+    if(v.length) o.res=v.reduce((a,b)=>a+b,0)/v.length;
+    const h=['4h','1d'].filter(k=>r.tfs[k]!=null).map(k=>clamp01(r.tfs[k]*sg/100));
+    if(h.length) o.htf=h.reduce((a,b)=>a+b,0)/h.length;
+  }
+  if(r.turnover>0) o.liq=clamp01((Math.log10(r.turnover)-6)/2);
+  return o;
+}
+function rankParts(r){ const n=rankNorm(r), o={}; WK.forEach(k=>{ o[k]=n[k]*RW[k]; }); return o; }
+function rankScore(r){ const p=rankParts(r); return Math.round(WK.reduce((a,k)=>a+p[k],0)); }
+function viewHits(s){
+  let a=s.hits.slice();
+  if(RESONLY) a=a.filter(r=>r.res);
+  a.sort((x,y)=>rankScore(y)-rankScore(x));
+  return RESONLY?a.slice(0,TOPN):a;
+}
+
+
 function hitCard(r,i){
   const c=mk('div','card'); c.onclick=()=>openSym(r.symbol);
   const l1=mk('div','l1');
   if($('sortkey').value==='rank') l1.appendChild(mk('span','rank','#'+(i+1)));
   l1.appendChild(mk('span','chip '+r.side, r.action));
   l1.appendChild(mk('b','',r.symbol));
-  if(r.allAligned) l1.appendChild(mk('span','rank','★5m~1h同向'));
   l1.appendChild(mk('span','rr','評分 '+rankScore(r)+' · 盈虧比 '+r.rr.toFixed(2)));
   c.appendChild(l1);
   const l2=mk('div','l2');
@@ -1231,6 +1263,10 @@ function hitCard(r,i){
   c.appendChild(l2);
   const chg=(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%';
   c.appendChild(mk('div','l3','現價 '+fmt(r.price)+' · 24h '+chg+' · 成交額 '+fmtTurn(r.turnover)));
+  if(r.tfs){
+    const sg=r.side==='long'?1:-1, lb=v=>v*sg>=25?'✓':v*sg<=-25?'✗':'–';
+    c.appendChild(mk('div','l3','各級別:'+['5m','15m','1h','4h','1d'].map(k=>k+(r.tfs[k]==null?'?':lb(r.tfs[k]))).join(' ')+(r.res?' · 全部同向':'')));
+  }
   return c;
 }
 function nearCard(r){
@@ -1264,15 +1300,10 @@ function renderScan(s){
   $('scanstat').textContent=st;
   if(s.status==='done' && s.total && s.failed/s.total>0.2) $('err').textContent='有 '+s.failed+' 個幣種抓取失敗(可能被限流),結果可能不完整,可稍後重新掃描。';
   const key=$('sortkey').value;
-  let hits;
-  if(key==='rank'){
-    hits=s.hits.filter(r=>r.allAligned===true && rankScore(r)>=30).sort((a,b)=>rankScore(b)-rankScore(a));
-  } else {
-    hits=s.hits.slice().sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : b.rr-a.rr);
-  }
+  const hits=viewHits(s).sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : key==='rr' ? b.rr-a.rr : rankScore(b)-rankScore(a));
   const near=s.near.slice().sort((a,b)=>b.turnover-a.turnover);
-  $('hitn').textContent=key==='rank' ? '('+hits.length+' / 前100名·5m~1h同向且≥30分)' : '('+hits.length+')';
-  const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (key==='rank' ? '目前前100名中沒有「5m/15m/1h同向且評分≥30」的幣種。可切換「依盈虧比」或「依成交額」查看單級別訊號。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
+  $('hitn').textContent=RESONLY ? '(各級別共振前 '+TOPN+':'+hits.length+' / 全部 '+s.hits.length+')' : '('+hits.length+')';
+  const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (RESONLY&&s.hits.length ? '有 '+s.hits.length+' 個可進場,但沒有 5 個級別方向都一致的。可取消勾選「只看各級別共振」查看全部。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
   fillList($('hits'),hits,hitCard,none);
   fillList($('near'),near,nearCard,s.status==='running' ? '掃描中…' : '目前沒有。');
   if($('auto').checked && s.status==='done' && s.age>180 && Date.now()-lastStart>10000) startScan();
@@ -1519,29 +1550,14 @@ setInterval(()=>{ if(tab==='monitor') tick(); else if(tab==='scan') pollScan(); 
 setInterval(()=>{ if(tab==='market') loadMarket(false); },60000);
 
 /* ---------- 綜合排名 ---------- */
-let RW={rr:30,tr:30,near:20,easy:20};
-function rankNorm(r){
-  const atr=r.atr||0;
-  const rr=Math.min(r.rr||0,4)/4;
-  const tr=Math.min(Math.max(r.ts==null?0:r.ts,0),100)/100;
-  let near=0.5, easy=0.5;
-  if(atr>0){
-    near=1-Math.min(Math.abs(r.price-r.entry)/atr,1);
-    easy=1-Math.min(Math.abs(r.tp1-r.entry)/atr/6,1);
-  }
-  return {rr:rr,tr:tr,near:near,easy:easy};
-}
-function rankParts(r){ const n=rankNorm(r); return {rr:n.rr*RW.rr,tr:n.tr*RW.tr,near:n.near*RW.near,easy:n.easy*RW.easy}; }
-function rankScore(r){ const p=rankParts(r); return Math.round(p.rr+p.tr+p.near+p.easy); }
-
 /* ---------- 模擬交易 ---------- */
 let SIM=null, simBusy=false, simSaveT=null, simLastSave=0, simErr='', simView='trade', simOpenSess={}, simKX=null;
 const LEVS={};
 const SL_MODES=[['signal','訊號止損'],['prev','前低(多)/前高(空)'],['pct_price','固定價格 %'],['pct_roe','固定本金報酬 %'],['usdt','固定虧損 USDT']];
 const TP_MODES=[['tp1','訊號止盈1'],['tp2','訊號止盈2'],['prev','前高(多)/前低(空)'],['pct_price','固定價格 %'],['pct_roe','固定本金報酬 %'],['usdt','固定獲利 USDT']];
 function simDefault(){
-  return {cfg:{capital:1000,lev:10,levMax:false,marginMode:'isolated',per:100,fee:0.055,maxPos:5,slMode:'signal',slV:2,tpMode:'tp1',tpV:4,minScore:50,minTs:-100},
-          cash:1000,pos:[],closed:[],done:{},running:false,nid:1,sid:1,start:Date.now(),history:[],weights:null};
+  return {cfg:{capital:1000,lev:10,levMax:false,marginMode:'isolated',per:100,fee:0.055,maxPos:5,slMode:'signal',slV:2,tpMode:'tp1',tpV:4,minScore:50,minTs:-100,resOnly:true,topN:10,autoTune:true},
+          cash:1000,pos:[],closed:[],done:{},running:false,nid:1,sid:1,start:Date.now(),history:[],weights:null,tuneLog:[],sinceTune:0};
 }
 function simNorm(s){
   const d=simDefault();
@@ -1637,7 +1653,8 @@ function simOpen(r,price,exk){
   SIM.cash-=c.per+feeO;
   const posObj={id:SIM.nid++,ex:exk,sym:r.symbol,side:r.side,tf:r.tf||curTf,entry:price,qty:qty,margin:c.per,lev:lev,marginMode:mMode,
     sl:sl,tp:tp,liq:0,feeO:feeO,feeR:c.fee,openT:Date.now(),last:price,rr:r.rr,score:rankScore(r),hi:price,lo:price,slMode:c.slMode,tpMode:c.tpMode,
-    f:{ts:r.ts==null?null:r.ts,rr:r.rr,near:atr>0?Math.abs(price-r.entry)/atr:null,easy:atr>0?Math.abs(r.tp1-r.entry)/atr:null,atrp:atr>0?atr/price*100:null,chg:r.chg==null?null:r.chg,n:[nn.rr,nn.tr,nn.near,nn.easy]}};
+    f:{ts:r.ts==null?null:r.ts,rr:r.rr,near:atr>0?Math.abs(price-r.entry)/atr:null,easy:atr>0?Math.abs(r.tp1-r.entry)/atr:null,atrp:atr>0?atr/price*100:null,chg:r.chg==null?null:r.chg,
+      resv:Math.round(nn.res*1000)/10,htfv:Math.round(nn.htf*1000)/10,turn:r.turnover>0?r.turnover/1e6:null,n2:WK.map(k=>nn[k])}};
   SIM.pos.push(posObj);
   simUpdateAllLiq();
   SIM.done[r.symbol+'|'+r.side+'|'+r.entry]=Date.now();
@@ -1661,6 +1678,10 @@ function simClose(p,exit,reason){
     mfe:(p.side==='long'?Math.max(p.hi,exit)-p.entry:p.entry-Math.min(p.lo,exit))/p.entry*100,
     mae:(p.side==='long'?p.entry-Math.min(p.lo,exit):Math.max(p.hi,exit)-p.entry)/p.entry*100});
   if(SIM.closed.length>5000) SIM.closed.length=5000;
+  if(reason==='tp'||reason==='sl'||reason==='liq'){
+    SIM.sinceTune=(SIM.sinceTune||0)+1;
+    if(SIM.cfg.autoTune&&SIM.sinceTune>=5){ SIM.sinceTune=0; if(simTune()&&scanS) renderScan(scanS); }
+  }
   simSave();
 }
 function isLiqBeforeSl(p){
@@ -1691,7 +1712,7 @@ function simFill(P){
   const c=SIM.cfg;
   if(!SIM.running||!scanS||scanS.status!=='done'||(scanS.age!=null&&scanS.age>600)) return;
   const pr=P[scanS.ex]||{};
-  const ranked=scanS.hits.filter(r=>r.allAligned===true && rankScore(r)>=30).sort((a,b)=>rankScore(b)-rankScore(a));
+  const ranked=viewHits(scanS);
   for(const r of ranked){
     if(SIM.pos.length>=c.maxPos) break;
     if(SIM.cash<c.per) break;
@@ -1742,7 +1763,7 @@ function dbl(el,fn){
   let last=0;
   el.addEventListener('click',e=>{ if(e.target.tagName==='BUTTON') return; const t=Date.now(); if(t-last<420){ last=0; fn(); } else last=t; });
 }
-const SIMF=[['capital','本金 (USDT)',1],['per','每單保證金 (USDT)',1],['fee','手續費 %/邊',0.001],['maxPos','最多同時持倉',1],['minScore','最低綜合評分(0=不限)',1],['minTs','最低趨勢分(-100=不限)',1]];
+const SIMF=[['topN','共振名單取前幾名',1],['capital','本金 (USDT)',1],['per','每單保證金 (USDT)',1],['fee','手續費 %/邊',0.001],['maxPos','最多同時持倉',1],['minScore','最低綜合評分(0=不限)',1],['minTs','最低趨勢分(-100=不限)',1]];
 function simBuild(){
   const box=$('simbody'); box.textContent='';
   const tabs=mk('div','simtabs');
@@ -1799,6 +1820,7 @@ function simNewRound(){
 function simSetCfg(k,v){
   const c=SIM.cfg;
   if(k==='levMax') c.levMax=!!v;
+  else if(k==='autoTune') c.autoTune=!!v;
   else if(k==='marginMode'){
     c.marginMode=(v==='cross'?'cross':'isolated');
     SIM.pos.forEach(p=>{ p.marginMode=c.marginMode; });
@@ -1811,6 +1833,7 @@ function simSetCfg(k,v){
     else if(!isFinite(n)||n<=0){ simRender(true); return; }
     if(k==='lev') n=Math.min(125,Math.max(1,n));
     if(k==='maxPos') n=Math.min(20,Math.max(1,Math.round(n)));
+    if(k==='topN'){ n=Math.min(50,Math.max(1,Math.round(n))); TOPN=n; $('resn').textContent=n; if(scanS) renderScan(scanS); }
     if(k==='capital'){ SIM.cash+=n-c.capital; simUpdateAllLiq(); }
     c[k]=n;
   }
@@ -1955,6 +1978,9 @@ const FACTORS=[
   ['止盈1 距離(ATR)',t=>t.f&&t.f.easy,[['<2',-INF,2],['2–4',2,4],['4–6',4,6],['≥6',6,INF]]],
   ['波動(ATR/價格 %)',t=>t.f&&t.f.atrp,[['<0.5%',-INF,0.5],['0.5–1%',0.5,1],['1–2%',1,2],['≥2%',2,INF]]],
   ['持倉時間',t=>(t.closeT-t.openT)/60000,[['<15 分',-INF,15],['15 分–1 時',15,60],['1–4 時',60,240],['≥4 時',240,INF]]],
+  ['各級別共振強度(平均順勢分)',t=>t.f&&t.f.resv,[['<30',-INF,30],['30–50',30,50],['50–70',50,70],['≥70',70,INF]]],
+  ['大級別 4h/1d 順勢強度',t=>t.f&&t.f.htfv,[['<30',-INF,30],['30–50',30,50],['50–70',50,70],['≥70',70,INF]]],
+  ['24h 成交額(百萬 U)',t=>t.f&&t.f.turn,[['<5',-INF,5],['5–20',5,20],['20–100',20,100],['≥100',100,INF]]],
   ['方向',t=>t.side==='long'?1:0,[['做空',0,1],['做多',1,2]]],
   ['級別',t=>({'5m':0,'15m':1,'1h':2,'4h':3})[t.tf],[['5m',0,1],['15m',1,2],['1h',2,3],['4h',3,4]]]
 ];
@@ -1984,16 +2010,17 @@ function verdict(t){
   return out.join(';');
 }
 function simSuggest(list){
-  const fl=settled(list).filter(t=>t.f&&t.f.n);
-  const w=fl.filter(t=>t.pnl>0), l=fl.filter(t=>t.pnl<=0);
-  const R={n:fl.length,ok:fl.length>=30&&w.length>=8&&l.length>=8};
+  const fl=list.filter(t=>t.reason==='tp'||t.reason==='sl'||t.reason==='liq').filter(t=>t.f&&t.f.n2&&t.f.n2.length===WK.length).sort((a,b)=>b.closeT-a.closeT);
+  const nw=fl.filter(t=>t.pnl>0).length, nl=fl.length-nw;
+  const R={n:fl.length,ok:fl.length>=40&&nw>=10&&nl>=10};
   if(!R.ok) return R;
-  const keys=['rr','tr','near','easy'];
-  const d=keys.map((k,i)=>simMean(w.map(t=>t.f.n[i]))-simMean(l.map(t=>t.f.n[i])));
-  const raw=d.map(x=>Math.max(x,0)+0.03), sum=raw.reduce((a,b)=>a+b,0);
-  const nw=keys.map((k,i)=>Math.round(0.5*RW[k]+0.5*raw[i]/sum*100));
-  const diff=100-nw.reduce((a,b)=>a+b,0); nw[nw.indexOf(Math.max(...nw))]+=diff;
-  R.d=d; R.weights={rr:nw[0],tr:nw[1],near:nw[2],easy:nw[3]};
+  const wm=(i,win)=>{ let sw=0,sm=0; fl.forEach((t,j)=>{ if((t.pnl>0)===win){ const k=Math.pow(0.5,j/50); sw+=k; sm+=k*t.f.n2[i]; } }); return sw?sm/sw:0; };
+  const d=WK.map((k,i)=>wm(i,true)-wm(i,false));
+  const raw=d.map(x=>Math.max(x,0)+0.02), sum=raw.reduce((a,b)=>a+b,0);
+  R.d=d; R.target={}; R.weights={};
+  const vals=WK.map((k,i)=>0.5*RW[k]+0.5*raw[i]/sum*100);
+  const rv=vals.map(Math.round), diff=100-rv.reduce((a,b)=>a+b,0); rv[rv.indexOf(Math.max(...rv))]+=diff;
+  WK.forEach((k,i)=>{ R.target[k]=raw[i]/sum*100; R.weights[k]=rv[i]; });
   const all=simMean(fl.map(t=>t.pnl)); R.all=all;
   const best=(vals,fn)=>{ let b=null;
     vals.forEach(v=>{ const g=fl.filter(t=>fn(t)>=v); if(g.length>=Math.max(15,fl.length*0.4)){ const a=simMean(g.map(t=>t.pnl)); if(a>all&&(!b||a>b.avg)) b={t:v,n:g.length,avg:a}; } });
@@ -2001,6 +2028,20 @@ function simSuggest(list){
   R.ts=best([0,25,50,75],t=>t.f.ts==null?-100:t.f.ts);
   R.sc=best([50,55,60,65,70],t=>t.score==null?0:t.score);
   return R;
+}
+/* 自動調整:每累積 5 筆有結果的單,往「贏的單 vs 輸的單」差距大的項目移 30%,每項限制 3–40 分 */
+function simTune(){
+  const g=simSuggest([].concat(SIM.closed,...SIM.history.map(h=>h.trades)));
+  if(!g.ok) return false;
+  const nw={}; let sum=0;
+  WK.forEach(k=>{ const v=Math.max(3,Math.min(40,0.7*RW[k]+0.3*g.target[k])); nw[k]=v; sum+=v; });
+  WK.forEach(k=>{ nw[k]=Math.round(nw[k]/sum*100); });
+  const diff=100-WK.reduce((a,k)=>a+nw[k],0), big=WK.reduce((a,k)=>nw[k]>nw[a]?k:a,WK[0]); nw[big]+=diff;
+  if(!WK.some(k=>nw[k]!==RW[k])) return false;
+  RW=nw; SIM.weights=Object.assign({},nw);
+  SIM.tuneLog.unshift({t:Date.now(),n:g.n,w:Object.assign({},nw)});
+  if(SIM.tuneLog.length>30) SIM.tuneLog.length=30;
+  return true;
 }
 function revRow(cells,head,cls){
   const d=mk('div','revrow'+(head?' revhead':'')+(cls?' '+cls:''));
@@ -2030,17 +2071,16 @@ function simRenderRev(){
   sg.appendChild(mk('div','l1','').appendChild(mk('b','','優化建議')).parentNode);
   const body=mk('div','l3','');
   if(!g.ok){
-    body.textContent='樣本還不夠:目前有因子資料的單 '+g.n+' 筆,至少要 30 筆(且賺、賠各 8 筆以上)才給建議。筆數太少時算出來的只是雜訊,硬調反而變差。';
+    body.textContent='樣本還不夠:目前有完整因子資料的單 '+g.n+' 筆(只算止盈/止損/強平,手動與結束本輪不算),至少要 40 筆(且賺、賠各 10 筆以上)才會調整。筆數太少時算出來的只是雜訊,硬調反而變差。';
     sg.appendChild(body);
   }else{
-    const nm={rr:'盈虧比',tr:'趨勢',near:'貼近進場',easy:'好止盈'};
-    const line=(a)=>['rr','tr','near','easy'].map(k=>nm[k]+' '+a[k]).join(' / ');
+    const line=(a)=>WK.map(k=>WN[k]+' '+a[k]).join(' / ');
     body.appendChild(mk('div','','目前評分權重:'+line(RW)));
     body.appendChild(mk('div','','建議權重:'+line(g.weights)+'(依「贏的單 vs 輸的單」各項分數差距算出,和現在的各占一半,避免調過頭)'));
     sg.appendChild(body);
     const bt=mk('div','simbtns');
     const b1=mk('button','','套用建議權重'); b1.onclick=()=>{ RW=Object.assign({},g.weights); SIM.weights=RW; simSave(); if(scanS) renderScan(scanS); simRenderRev(); };
-    const b2=mk('button','','還原預設權重'); b2.onclick=()=>{ RW={rr:30,tr:30,near:20,easy:20}; SIM.weights=null; simSave(); if(scanS) renderScan(scanS); simRenderRev(); };
+    const b2=mk('button','','還原預設權重'); b2.onclick=()=>{ RW=Object.assign({},DEF_W); SIM.weights=null; simSave(); if(scanS) renderScan(scanS); simRenderRev(); };
     bt.appendChild(b1); bt.appendChild(b2); sg.appendChild(bt);
     const th=mk('div','');
     if(g.ts){ const b=mk('button','','只開趨勢分 ≥ '+g.ts.t+'('+g.ts.n+' 筆,平均 '+money(g.ts.avg)+' vs 全部 '+money(g.all)+')'); b.onclick=()=>{ SIM.cfg.minTs=g.ts.t; simSave(); simRender(true); }; th.appendChild(b); }
@@ -2049,6 +2089,14 @@ function simRenderRev(){
     th.querySelectorAll('button').forEach(b=>{ b.style.cssText='display:block;width:100%;margin-top:6px;text-align:left;background:var(--card);color:var(--tx);border:1px solid var(--mut);border-radius:8px;padding:6px 8px;cursor:pointer;font-size:12px'; });
     sg.appendChild(th);
     sg.appendChild(mk('div','simnote','門檻在「交易」分頁的最低評分 / 最低趨勢分可以手動改回。這是回頭看歷史算的,容易過度配適,請繼續模擬驗證。'));
+  }
+  const at=document.createElement('label'); at.className='simchk'; at.style.cssText='display:flex;gap:6px;align-items:center;margin-top:8px;font-size:13px';
+  const ac=document.createElement('input'); ac.type='checkbox'; ac.checked=!!c.autoTune; ac.onchange=()=>{ c.autoTune=ac.checked; simSave(); };
+  at.appendChild(ac); at.appendChild(document.createTextNode('自動依紀錄調整權重(每累積 5 筆有結果的單調整一次,每次只往建議值移 30%)'));
+  sg.appendChild(at);
+  if(SIM.tuneLog&&SIM.tuneLog.length){
+    sg.appendChild(mk('div','simnote','最近的自動調整:'));
+    SIM.tuneLog.slice(0,5).forEach(x=>sg.appendChild(mk('div','simnote',tstr(x.t)+'(依 '+x.n+' 筆)'+WK.map(k=>WN[k]+' '+x.w[k]).join(' / '))));
   }
   out.push(sg);
   out.push(mk('div','sec','').appendChild(mk('div','','各項因素 vs 勝率')).parentNode);
@@ -2130,93 +2178,3 @@ function simShowK(x){
 async function simKLoad(){
   const X=simKX; if(!X) return;
   const tfs=$('simktf'); tfs.textContent='';
-  ['5m','15m','1h','4h'].forEach(t=>{ const b=mk('button',t===X.tf?'on':'',t); b.onclick=()=>{ X.tf=t; simKLoad(); }; tfs.appendChild(b); });
-  X.err='載入中…'; simDrawK();
-  try{ const d=await simKlines(X.ex,X.sym,X.tf); if(simKX!==X) return; X.d=d; X.err=''; X.at=Date.now(); }
-  catch(e){ if(simKX!==X) return; X.err='K 線載入失敗'; }
-  simDrawK();
-}
-function simKRefresh(){
-  const X=simKX; if(!X||$('simk').style.display==='none') return;
-  if(X.pid!=null&&Date.now()-X.at>30000&&X.err==='') simKLoad(); else simDrawK();
-}
-function simDrawK(){
-  const X=simKX, cv=$('simkc'); if(!X||!cv.getContext) return;
-  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||360, H=cv.clientHeight||320;
-  cv.width=W*dpr; cv.height=H*dpr;
-  const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
-  const cs=getComputedStyle(document.documentElement);
-  const up=cs.getPropertyValue('--up').trim()||'#2ecc71', dn=cs.getPropertyValue('--dn').trim()||'#ff5a5f', mut=cs.getPropertyValue('--mut').trim()||'#888';
-  const leg=$('simkleg'); leg.textContent='';
-  const lines=simKLines().filter(x=>x[1]!=null&&isFinite(x[1]));
-  lines.forEach(x=>{ const s=mk('span','',x[0]+' '+fmt(x[1])); s.style.color=x[2]; s.style.marginRight='10px'; leg.appendChild(s); });
-  const d=X.d;
-  if(!d||!d.c||!d.c.length){ g.fillStyle=mut; g.font='13px sans-serif'; g.fillText(X.err||'沒有資料',12,24); return; }
-  const n=d.c.length, cnt=Math.min(100,n), s0=n-cnt, padL=4, padR=62, padT=8, padB=6;
-  let lo=Infinity, hi=-Infinity;
-  for(let i=s0;i<n;i++){ lo=Math.min(lo,d.l[i]); hi=Math.max(hi,d.h[i]); }
-  const rg=hi-lo||1, vis=lines.filter(x=>x[1]>lo-rg&&x[1]<hi+rg);
-  vis.forEach(x=>{ lo=Math.min(lo,x[1]); hi=Math.max(hi,x[1]); });
-  const R=(hi-lo)||1, Y=v=>padT+(hi-v)/R*(H-padT-padB), st=(W-padL-padR)/cnt;
-  for(let i=s0;i<n;i++){
-    const x=padL+(i-s0)*st+st/2, col=d.c[i]>=d.o[i]?up:dn;
-    g.strokeStyle=col; g.fillStyle=col; g.lineWidth=1;
-    g.beginPath(); g.moveTo(x,Y(d.h[i])); g.lineTo(x,Y(d.l[i])); g.stroke();
-    const y1=Y(Math.max(d.o[i],d.c[i])), y2=Y(Math.min(d.o[i],d.c[i]));
-    g.fillRect(x-st*0.35,y1,st*0.7,Math.max(1,y2-y1));
-  }
-  const barAt=t=>{ if(!d.t||t==null) return -1; let k=-1; for(let i=s0;i<n;i++){ if(d.t[i]!=null&&d.t[i]<=t) k=i; } return k; };
-  const mark=(t,col)=>{ const k=barAt(t); if(k<0) return; const x=padL+(k-s0)*st+st/2; g.strokeStyle=col; g.setLineDash([2,3]); g.beginPath(); g.moveTo(x,padT); g.lineTo(x,H-padB); g.stroke(); g.setLineDash([]); };
-  const p=X.pid!=null?SIM.pos.find(q=>q.id===X.pid):null, tr=p||X.trade;
-  if(tr){ mark(tr.openT,'#4da3ff'); if(!p) mark(tr.closeT,'#cccccc'); }
-  vis.forEach(x=>{
-    g.strokeStyle=x[2]; g.fillStyle=x[2]; g.lineWidth=1; g.setLineDash(x[0]==='強平'?[2,3]:[6,3]);
-    g.beginPath(); g.moveTo(padL,Y(x[1])); g.lineTo(W-padR,Y(x[1])); g.stroke(); g.setLineDash([]);
-    g.font='11px sans-serif'; g.fillText(x[0]+' '+fmt(x[1]),W-padR+3,Y(x[1])+4);
-  });
-}
-function simKClose(){ simKX=null; $('simk').style.display='none'; }
-function simOpenModal(){ $('simmodal').style.display='flex'; $('simmodal').scrollTop=0; simRender(true); simTick(); }
-async function simInit(){
-  SIM=simNorm(await simLoadState());
-  if(SIM.weights&&SIM.weights.rr!=null) RW=SIM.weights;
-  $('simbtn').onclick=simOpenModal;
-  $('simclose').onclick=()=>{ $('simmodal').style.display='none'; simKClose(); };
-  $('simkclose').onclick=simKClose;
-  simBuild(); setInterval(simTick,5000);
-}
-
-simInit();
-
-/* ---------- 手機用:提醒音/震動、螢幕保持亮著、連線檢查 ---------- */
-let AC=null;
-function unlockAudio(){ try{ if(!AC){ const C=window.AudioContext||window.webkitAudioContext; if(C) AC=new C(); } if(AC&&AC.state==='suspended') AC.resume(); }catch(e){} }
-document.addEventListener('pointerdown',unlockAudio,{passive:true});
-function buzz(){
-  if(!$('snd').checked) return;
-  try{ if(navigator.vibrate) navigator.vibrate([200,100,200,100,200]); }catch(e){}
-  try{
-    if(!AC) return;
-    [0,0.22,0.44].forEach((t,i)=>{
-      const o=AC.createOscillator(), g=AC.createGain(); o.frequency.value=i===2?1175:880; o.type='sine';
-      g.gain.setValueAtTime(0.0001,AC.currentTime+t); g.gain.exponentialRampToValueAtTime(0.25,AC.currentTime+t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+t+0.18);
-      o.connect(g); g.connect(AC.destination); o.start(AC.currentTime+t); o.stop(AC.currentTime+t+0.2);
-    });
-  }catch(e){}
-}
-let wl=null;
-async function applyAwake(){
-  try{
-    if($('awake').checked && !document.hidden && 'wakeLock' in navigator){ if(!wl){ wl=await navigator.wakeLock.request('screen'); wl.addEventListener('release',()=>{ wl=null; }); } }
-    else if(wl){ await wl.release(); wl=null; }
-  }catch(e){ wl=null; }
-}
-$('awake').checked=LS.get('mtf_awake','1')==='1'; $('snd').checked=LS.get('mtf_snd','1')==='1';
-$('awake').onchange=()=>{ LS.set('mtf_awake',$('awake').checked?'1':'0'); applyAwake(); };
-$('snd').onchange=()=>{ LS.set('mtf_snd',$('snd').checked?'1':'0'); if($('snd').checked){ unlockAudio(); buzz(); } };
-document.addEventListener('visibilitychange',applyAwake);
-document.addEventListener('pointerdown',applyAwake,{once:true,passive:true});
-applyAwake();
-$('chk').onclick=async()=>{ $('conn').textContent='檢查中…'; $('conn').textContent=(await checkConn()).join('\n'); };
-</script></body></html>
