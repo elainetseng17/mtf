@@ -1,0 +1,168 @@
+name: Crypto Signal Automated Scanner
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 檢出程式碼
+        uses: actions/checkout@v4
+
+      - name: 2. 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 3. 執行掃描並發送 Discord 推播
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python3 -c "
+          import os, json, urllib.request
+          from concurrent.futures import ThreadPoolExecutor
+
+          def http_json(url):
+              req = urllib.request.Request(url, headers={'User-Agent': 'mtf-scanner/1.0'})
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  return json.loads(r.read().decode('utf-8'))
+
+          def ema(vals, n):
+              k = 2 / (n + 1)
+              out, e = [], vals[0]
+              for v in vals:
+                  e = v * k + e * (1 - k)
+                  out.append(e)
+              return out
+
+          def rsi(closes, n=14):
+              gains = losses = 0.0
+              for i in range(1, n + 1):
+                  d = closes[i] - closes[i - 1]
+                  gains += max(d, 0); losses += max(-d, 0)
+              ag, al = gains / n, losses / n
+              for i in range(n + 1, len(closes)):
+                  d = closes[i] - closes[i - 1]
+                  ag = (ag * (n - 1) + max(d, 0)) / n
+                  al = (al * (n - 1) + max(-d, 0)) / n
+              return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+          def macd_hist(closes):
+              fast, slow = ema(closes, 12), ema(closes, 26)
+              line = [f - s for f, s in zip(fast, slow)]
+              sig = ema(line, 9)
+              return [l - s for l, s in zip(line, sig)]
+
+          def atr(h, l, c, n=14):
+              trs = [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, len(c))]
+              a = sum(trs[:n]) / n
+              for t in trs[n:]:
+                  a = (a * (n - 1) + t) / n
+              return a
+
+          def adx(h, l, c, n=14):
+              pdm, mdm, trs = [], [], []
+              for i in range(1, len(c)):
+                  up, dn = h[i] - h[i - 1], l[i - 1] - l[i]
+                  pdm.append(up if up > dn and up > 0 else 0)
+                  mdm.append(dn if dn > up and dn > 0 else 0)
+                  trs.append(max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])))
+              def wilder(x):
+                  s = sum(x[:n]); out = [s]
+                  for v in x[n:]:
+                      s = s - s / n + v; out.append(s)
+                  return out
+              ptr, pd_, md_ = wilder(trs), wilder(pdm), wilder(mdm)
+              dx = []
+              for t, p, m in zip(ptr, pd_, md_):
+                  if t == 0: dx.append(0); continue
+                  pi, mi = 100 * p / t, 100 * m / t
+                  dx.append(0 if pi + mi == 0 else 100 * abs(pi - mi) / (pi + mi))
+              a = sum(dx[:n]) / n
+              for v in dx[n:]:
+                  a = (a * (n - 1) + v) / n
+              return a
+
+          def score_tf(o, h, l, c):
+              price = c[-1]
+              e20, e50 = ema(c, 20)[-1], ema(c, 50)[-1]
+              e200 = ema(c, 200)[-1] if len(c) >= 200 else ema(c, 100)[-1]
+              hist = macd_hist(c)
+              r, a, at = rsi(c), adx(h, l, c), atr(h, l, c)
+              s = 0
+              if price > e20 > e50 > e200: s += 40
+              elif price < e20 < e50 < e200: s -= 40
+              else: s += 10 * ((price > e20) + (e20 > e50) + (price > e200)) - 15
+              if hist[-1] > 0: s += 25 if hist[-1] > hist[-2] else 10
+              else: s -= 25 if hist[-1] < hist[-2] else 10
+              if 55 <= r < 70: s += 20
+              elif r >= 70: s += 5
+              elif 30 < r <= 45: s -= 20
+              elif r <= 30: s -= 5
+              if price >= max(h[-21:-1]): s += 15
+              elif price <= min(l[-21:-1]): s -= 15
+              if a < 22: s = int(s * 0.6)
+              return max(-100, min(100, s)), at
+
+          def lbl(s):
+              return '多' if s >= 25 else '空' if s <= -25 else '觀望'
+
+          def scan_sym(item):
+              sym = item['symbol']
+              scores = {}
+              for tf, iv in [('5m', '5'), ('15m', '15'), ('1h', '60')]:
+                  try:
+                      p = http_json(f'https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval={iv}&limit=220')
+                      rows = list(reversed(p['result']['list']))[:-1]
+                      if len(rows) < 60: return None
+                      o = [float(r[1]) for r in rows]
+                      h = [float(r[2]) for r in rows]
+                      l = [float(r[3]) for r in rows]
+                      c = [float(r[4]) for r in rows]
+                      sc, at = score_tf(o, h, l, c)
+                      scores[tf] = (sc, at, c[-1])
+                  except Exception:
+                      return None
+              dirs = {lbl(scores[t][0]) for t in ('5m', '15m', '1h')}
+              if len(dirs) == 1 and list(dirs)[0] in ('多', '空'):
+                  d = list(dirs)[0]
+                  avg_abs = sum(abs(scores[t][0]) for t in ('5m', '15m', '1h')) / 3
+                  if avg_abs >= 50:
+                      px = scores['15m'][2]
+                      at = scores['15m'][1]
+                      sl = px - 1.5 * at if d == '多' else px + 1.5 * at
+                      tp1 = px + 2.5 * at if d == '多' else px - 2.5 * at
+                      return {'sym': sym, 'dir': d, 'score': round(avg_abs), 'px': px, 'sl': sl, 'tp1': tp1}
+              return None
+
+          hits = []
+          try:
+              tk = http_json('https://api.bybit.com/v5/market/tickers?category=linear')
+              syms = [
+                  {'symbol': it.get('symbol', '')}
+                  for it in tk['result']['list']
+                  if it.get('symbol', '').endswith('USDT') and '-' not in it.get('symbol', '') and float(it.get('lastPrice') or 0) > 0
+              ]
+              with ThreadPoolExecutor(max_workers=8) as ex:
+                  for res in ex.map(scan_sym, syms):
+                      if res: hits.append(res)
+          except Exception as e:
+              print('掃描錯誤:', e)
+
+          hits.sort(key=lambda x: -x['score'])
+          webhook = os.environ.get('DISCORD_WEBHOOK_URL', '').strip()
+          if webhook:
+              if hits:
+                  lines = [f\"• **{h['sym']}**（{'做多📈' if h['dir']=='多' else '做空📉'}｜{h['score']}分）現價 `{h['px']}`｜止損 `{h['sl']:.4f}`｜止盈1 `{h['tp1']:.4f}`\" for h in hits[:20]]
+                  msg = '🚨 **【倫家財富自由】5m/15m/1h 同向且 ≥50 分訊號**\n' + '\n'.join(lines)
+              else:
+                  msg = '🔍 **【倫家財富自由】定時掃描完成**：目前暫無 5m/15m/1h 同向且 ≥50 分的幣種。'
+              req = urllib.request.Request(webhook, data=json.dumps({'content': msg[:1950]}).encode('utf-8'), headers={'Content-Type': 'application/json'})
+              urllib.request.urlopen(req, timeout=15)
+              print('Discord 推播成功，命中數:', len(hits))
+          else:
+              print('未設定 DISCORD_WEBHOOK_URL，命中數:', len(hits))
+          "
