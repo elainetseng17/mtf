@@ -69,6 +69,7 @@ canvas.dragging{cursor:grabbing}
 .lamps{display:flex;gap:4px}
 .lamp{flex:1;text-align:center;font-size:11px;padding:2px 0;border-radius:6px;border:1px solid var(--line);color:var(--mut)}
 .lamp.on{font-weight:700;animation:glow 1.6s ease-in-out infinite}
+.lamp.sel{outline:2px solid var(--tx);outline-offset:1px}
 .lamp.on.long{background:var(--up);border-color:var(--up);color:#06130d;box-shadow:0 0 8px var(--up)}
 .lamp.on.short{background:var(--dn);border-color:var(--dn);color:#fff;box-shadow:0 0 8px var(--dn)}
 @keyframes glow{50%{filter:brightness(1.35)}}
@@ -668,7 +669,8 @@ function scanBlank(){ return {status:'idle',ex:null,tf:null,min_turn:0,done:0,to
   hits:[],near:[],started:null,finished:null,error:null,last_error:null}; }
 Scan.s=scanBlank();
 function scanStart(exk,tf,minTurn){
-  if(!EXCH[exk]||!SETUP_TFS.includes(tf)) return;
+  if(!EXCH[exk]) return;
+  tf='all';
   Scan.gen++; const gen=Scan.gen;
   Scan.s=scanBlank(); Object.assign(Scan.s,{status:'running',ex:exk,tf,min_turn:minTurn,started:nowSec()});
   scanRun(gen,exk,tf,minTurn);
@@ -688,48 +690,52 @@ function pivotLevels(h,l,k=3,look=150,keep=8){
   }
   return [hs.slice(-keep),ls.slice(-keep)];
 }
-async function scanOne(gen,ex,x,tf){
+async function scanOne(gen,ex,x){
   if(gen!==Scan.gen) return ['skip',null];
-  const sym=x.symbol; let results={};
-  if(CFG.trend_filter){
-    const d1=await getK(ex,sym,'1d',600), d4=await getK(ex,sym,'4h',600);
-    const c1=closedArrays(d1), c4=closedArrays(d4);
-    if(c1[3].length<MIN_BARS||c4[3].length<MIN_BARS) return ['skip',null];
-    results={'1d':scoreTimeframe(...c1),'4h':scoreTimeframe(...c4)};
-    if(decide(results)[2]==='觀望') return ['none',null];
+  const sym=x.symbol, ca={};
+  for(const t of TIMEFRAMES){
+    const d=await getK(ex,sym,t,KTTL[t]);
+    const c=closedArrays(d);
+    if(c[3].length<MIN_BARS) return ['skip',null];
+    ca[t]=c;
   }
-  const de=(tf==='4h'||tf==='1d')?await getK(ex,sym,tf,600):await ex.klines(sym,tf);
-  const ce=closedArrays(de);
-  if(ce[3].length<MIN_BARS) return ['skip',null];
-  if(!results[tf]) results[tf]=scoreTimeframe(...ce);
-  const atrV=results[tf][1].atr;
-  const setups={[tf]:{long:analyzeLong(ce[1],ce[2],ce[3],atrV,CFG),short:analyzeShort(ce[1],ce[2],ce[3],atrV,CFG),atr:atrV}};
-  const price=x.price, view=makeView(results,setups,tf,price,CFG), side=view.side;
-  if(!side) return ['none',null];
-  const s=setups[tf][side];
-  const rec={symbol:sym,side,price,chg:x.chg,turnover:x.turnover,state:s.state,phase:view.phase,atr:atrV,ts:Math.round(results[tf][0]*(side==='long'?1:-1)*10)/10};
-  if(view.action==='做多'||view.action==='做空'){
-    try{
-      const p2=(await ex.ticker(sym))[0];
-      if(makeView(results,setups,tf,p2,CFG).action!==view.action) return ['none',null];
-      rec.price=p2;
-    }catch(e){}
-    const tfs={[tf]:Math.round(results[tf][0]*10)/10};
-    for(const t2 of TIMEFRAMES){
-      if(t2===tf) continue;
-      try{
-        const d2=await getK(ex,sym,t2,KTTL[t2]);
-        const c2=closedArrays(d2);
-        if(c2[3].length>=MIN_BARS) tfs[t2]=Math.round(scoreTimeframe(...c2)[0]*10)/10;
-      }catch(e){}
+  const results={}; for(const t of TIMEFRAMES) results[t]=scoreTimeframe(...ca[t]);
+  if(CFG.trend_filter&&decide(results)[2]==='觀望') return ['none',null];
+  const setups={};
+  for(const t of SETUP_TFS){
+    const a=results[t][1].atr;
+    setups[t]={long:analyzeLong(ca[t][1],ca[t][2],ca[t][3],a,CFG),short:analyzeShort(ca[t][1],ca[t][2],ca[t][3],a,CFG),atr:a};
+  }
+  const tfs={}; for(const t of TIMEFRAMES) tfs[t]=Math.round(results[t][0]*10)/10;
+  const labs=new Set(Object.values(tfs).map(labelOf));
+  const allDir=labs.size===1?[...labs][0]:null;
+  const build=price=>{
+    const out={};
+    for(const t of SETUP_TFS){
+      const v=makeView(results,setups,t,price,CFG), sd=v.side;
+      if(!sd) continue;
+      const st=setups[t][sd], on=v.action==='做多'||v.action==='做空';
+      const L={on,side:sd,state:st.state,phase:v.phase,atr:setups[t].atr,
+        ts:Math.round(results[t][0]*(sd==='long'?1:-1)*10)/10,
+        res:!!(on&&allDir===(sd==='long'?'多':'空'))};
+      if(on){
+        const pv=pivotLevels(ca[t][1],ca[t][2]);
+        Object.assign(L,{action:v.action,cls:v.cls,entry:st.entry,sl:st.sl,tp1:st.tp1,tp2:st.tp2,rr:st.rr,pvh:pv[0],pvl:pv[1]});
+      } else Object.assign(L,{fib:st.fib,run:st.run});
+      out[t]=L;
     }
-    const want=side==='long'?'多':'空';
-    const resOk=Object.keys(tfs).length===TIMEFRAMES.length&&Object.values(tfs).every(v=>labelOf(v)===want);
-    const pv=pivotLevels(ce[1],ce[2]);
-    Object.assign(rec,{action:view.action,entry:s.entry,sl:s.sl,tp1:s.tp1,tp2:s.tp2,rr:s.rr,pvh:pv[0],pvl:pv[1],tfs:tfs,res:resOk,allAligned:resOk});
-    return ['hit',rec];
+    return out;
+  };
+  let price=x.price, lamps=build(price);
+  if(Object.values(lamps).some(L=>L.on)){
+    try{ const p2=(await ex.ticker(sym))[0]; lamps=build(p2); price=p2; }catch(e){}
   }
-  if(s.state==='testing'){ Object.assign(rec,{fib:s.fib,run:s.run}); return ['near',rec]; }
+  const rec={symbol:sym,price,chg:x.chg,turnover:x.turnover,tfs,allDir,lamps};
+  if(Object.values(lamps).some(L=>L.on)) return ['hit',rec];
+  for(const t of SETUP_TFS){
+    const L=lamps[t];
+    if(L&&L.state==='testing'){ Object.assign(rec,{tf:t,side:L.side,phase:L.phase,fib:L.fib,run:L.run}); return ['near',rec]; }
+  }
   return ['none',null];
 }
 async function scanRun(gen,exk,tf,minTurn){
@@ -746,7 +752,7 @@ async function scanRun(gen,exk,tf,minTurn){
     while(gen===Scan.gen){
       const i=idx++; if(i>=syms.length) return;
       let kind,rec,err=null;
-      try{ [kind,rec]=await scanOne(gen,ex,syms[i],tf); }catch(e){ kind='fail'; err=(e&&e.name||'Error')+': '+(e&&e.message||e); }
+      try{ [kind,rec]=await scanOne(gen,ex,syms[i]); }catch(e){ kind='fail'; err=(e&&e.name||'Error')+': '+(e&&e.message||e); }
       if(gen!==Scan.gen) return;
       const s=Scan.s; s.done++;
       if(kind==='fail'){ s.failed++; s.last_error=err; }
@@ -1066,11 +1072,11 @@ function setTab(t){
   $('scanview').style.display = t==='scan' ? 'block' : 'none';
   $('monview').style.display = t==='monitor' ? 'block' : 'none';
   $('marketview').style.display = t==='market' ? 'block' : 'none';
-  $('tfrow').style.display = t==='market' ? 'none' : 'flex';
+  $('tfrow').style.display = (t==='market'||t==='scan') ? 'none' : 'flex';
   document.querySelectorAll('#tabs button').forEach(b=>{ b.className = (t!=='market' && b.dataset.tab===t) ? 'on' : ''; });
   mkExButtons();
   $('err').textContent=''; paintTf();
-  if(t==='scan'){ pollScan(); if(!scanS || scanS.status==='idle' || scanS.ex!==EX || scanS.tf!==curTf) startScan(); }
+  if(t==='scan'){ pollScan(); if(!scanS || scanS.status==='idle' || scanS.ex!==EX) startScan(); }
   else if(t==='monitor'){ tick(); }
   else { loadMarket(false); }
 }
@@ -1240,16 +1246,30 @@ function rankNorm(r){
 }
 function rankParts(r){ const n=rankNorm(r), o={}; WK.forEach(k=>{ o[k]=n[k]*RW[k]; }); return o; }
 function rankScore(r){ const p=rankParts(r); return Math.round(WK.reduce((a,k)=>a+p[k],0)); }
-function viewHits(s){
-  let a=s.hits.slice();
-  if(RESONLY) a=a.filter(r=>r.res);
-  a.sort((x,y)=>rankScore(y)-rankScore(x));
-  return RESONLY?a.slice(0,TOPN):a;
+const STF=['5m','15m','1h','4h'];
+let SELTF={};                                        /* 掃描結果:每個幣目前選看哪個級別(只影響顯示,模擬交易不看) */
+function flatPlan(b,tf){ return Object.assign({},b,b.lamps[tf],{tf:tf,lamps:b.lamps,base:b}); }
+function viewHits(s,disp){
+  const out=[];
+  for(const b of s.hits){
+    let best=null, bs=-1;
+    for(const tf of STF){
+      const l=b.lamps&&b.lamps[tf];
+      if(!l||!l.on||(RESONLY&&!l.res)) continue;
+      const f=flatPlan(b,tf), sc=rankScore(f);
+      if(sc>bs){ bs=sc; best=f; }
+    }
+    if(best) out.push(best);
+  }
+  out.sort((x,y)=>rankScore(y)-rankScore(x));
+  const a=RESONLY?out.slice(0,TOPN):out;
+  if(!disp) return a;
+  return a.map(f=>{ const t=SELTF[f.symbol], l=t&&f.lamps[t]; return (l&&l.on&&t!==f.tf&&(!RESONLY||l.res)) ? flatPlan(f.base,t) : f; });
 }
 
 
 function hitCard(r,i){
-  const c=mk('div','card'); c.onclick=()=>openSym(r.symbol);
+  const c=mk('div','card'); c.onclick=()=>{ curTf=r.tf; resetView(); mkTfButtons(); openSym(r.symbol); };
   const l1=mk('div','l1');
   if($('sortkey').value==='rank') l1.appendChild(mk('span','rank','#'+(i+1)));
   l1.appendChild(mk('span','chip '+r.side, r.action));
@@ -1263,6 +1283,14 @@ function hitCard(r,i){
   c.appendChild(l2);
   const chg=(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%';
   c.appendChild(mk('div','l3','現價 '+fmt(r.price)+' · 24h '+chg+' · 成交額 '+fmtTurn(r.turnover)));
+  const lp=mk('div','lamps');
+  STF.forEach(t=>{
+    const l=r.lamps[t], on=!!(l&&l.on);
+    const e=mk('span','lamp'+(on?' on '+(l.side==='long'?'long':'short'):'')+(t===r.tf?' sel':''),t);
+    if(on){ e.onclick=ev=>{ ev.stopPropagation(); SELTF[r.symbol]=t; renderScan(scanS); }; }
+    lp.appendChild(e);
+  });
+  c.appendChild(lp);
   if(r.tfs){
     const sg=r.side==='long'?1:-1, lb=v=>v*sg>=25?'✓':v*sg<=-25?'✗':'–';
     c.appendChild(mk('div','l3','各級別:'+['5m','15m','1h','4h','1d'].map(k=>k+(r.tfs[k]==null?'?':lb(r.tfs[k]))).join(' ')+(r.res?' · 全部同向':'')));
@@ -1300,7 +1328,7 @@ function renderScan(s){
   $('scanstat').textContent=st;
   if(s.status==='done' && s.total && s.failed/s.total>0.2) $('err').textContent='有 '+s.failed+' 個幣種抓取失敗(可能被限流),結果可能不完整,可稍後重新掃描。';
   const key=$('sortkey').value;
-  const hits=viewHits(s).sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : key==='rr' ? b.rr-a.rr : rankScore(b)-rankScore(a));
+  const hits=viewHits(s,true).sort((a,b)=>key==='turnover' ? b.turnover-a.turnover : key==='rr' ? b.rr-a.rr : rankScore(b)-rankScore(a));
   const near=s.near.slice().sort((a,b)=>b.turnover-a.turnover);
   $('hitn').textContent=RESONLY ? '(各級別共振前 '+TOPN+':'+hits.length+' / 全部 '+s.hits.length+')' : '('+hits.length+')';
   const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (RESONLY&&s.hits.length ? '有 '+s.hits.length+' 個可進場,但沒有 5 個級別方向都一致的。可取消勾選「只看各級別共振」查看全部。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
@@ -1723,7 +1751,6 @@ function simFill(P){
     const price=pr[r.symbol];
     if(price==null) continue;
     if(r.atr>0&&Math.abs(price-r.entry)>r.atr) continue;
-    r.tf=scanS.tf;
     if(simOpen(r,price,scanS.ex)) simSave();
   }
 }
@@ -2178,3 +2205,95 @@ function simShowK(x){
 async function simKLoad(){
   const X=simKX; if(!X) return;
   const tfs=$('simktf'); tfs.textContent='';
+  ['5m','15m','1h','4h'].forEach(t=>{ const b=mk('button',t===X.tf?'on':'',t); b.onclick=()=>{ X.tf=t; simKLoad(); }; tfs.appendChild(b); });
+  X.err='載入中…'; simDrawK();
+  try{ const d=await simKlines(X.ex,X.sym,X.tf); if(simKX!==X) return; X.d=d; X.err=''; X.at=Date.now(); }
+  catch(e){ if(simKX!==X) return; X.err='K 線載入失敗'; }
+  simDrawK();
+}
+function simKRefresh(){
+  const X=simKX; if(!X||$('simk').style.display==='none') return;
+  if(X.pid!=null&&Date.now()-X.at>30000&&X.err==='') simKLoad(); else simDrawK();
+}
+function simDrawK(){
+  const X=simKX, cv=$('simkc'); if(!X||!cv.getContext) return;
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||360, H=cv.clientHeight||320;
+  cv.width=W*dpr; cv.height=H*dpr;
+  const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
+  const cs=getComputedStyle(document.documentElement);
+  const up=cs.getPropertyValue('--up').trim()||'#2ecc71', dn=cs.getPropertyValue('--dn').trim()||'#ff5a5f', mut=cs.getPropertyValue('--mut').trim()||'#888';
+  const leg=$('simkleg'); leg.textContent='';
+  const lines=simKLines().filter(x=>x[1]!=null&&isFinite(x[1]));
+  lines.forEach(x=>{ const s=mk('span','',x[0]+' '+fmt(x[1])); s.style.color=x[2]; s.style.marginRight='10px'; leg.appendChild(s); });
+  const d=X.d;
+  if(!d||!d.c||!d.c.length){ g.fillStyle=mut; g.font='13px sans-serif'; g.fillText(X.err||'沒有資料',12,24); return; }
+  const n=d.c.length, cnt=Math.min(100,n), s0=n-cnt, padL=4, padR=62, padT=8, padB=6;
+  let lo=Infinity, hi=-Infinity;
+  for(let i=s0;i<n;i++){ lo=Math.min(lo,d.l[i]); hi=Math.max(hi,d.h[i]); }
+  const rg=hi-lo||1, vis=lines.filter(x=>x[1]>lo-rg&&x[1]<hi+rg);
+  vis.forEach(x=>{ lo=Math.min(lo,x[1]); hi=Math.max(hi,x[1]); });
+  const R=(hi-lo)||1, Y=v=>padT+(hi-v)/R*(H-padT-padB), st=(W-padL-padR)/cnt;
+  for(let i=s0;i<n;i++){
+    const x=padL+(i-s0)*st+st/2, col=d.c[i]>=d.o[i]?up:dn;
+    g.strokeStyle=col; g.fillStyle=col; g.lineWidth=1;
+    g.beginPath(); g.moveTo(x,Y(d.h[i])); g.lineTo(x,Y(d.l[i])); g.stroke();
+    const y1=Y(Math.max(d.o[i],d.c[i])), y2=Y(Math.min(d.o[i],d.c[i]));
+    g.fillRect(x-st*0.35,y1,st*0.7,Math.max(1,y2-y1));
+  }
+  const barAt=t=>{ if(!d.t||t==null) return -1; let k=-1; for(let i=s0;i<n;i++){ if(d.t[i]!=null&&d.t[i]<=t) k=i; } return k; };
+  const mark=(t,col)=>{ const k=barAt(t); if(k<0) return; const x=padL+(k-s0)*st+st/2; g.strokeStyle=col; g.setLineDash([2,3]); g.beginPath(); g.moveTo(x,padT); g.lineTo(x,H-padB); g.stroke(); g.setLineDash([]); };
+  const p=X.pid!=null?SIM.pos.find(q=>q.id===X.pid):null, tr=p||X.trade;
+  if(tr){ mark(tr.openT,'#4da3ff'); if(!p) mark(tr.closeT,'#cccccc'); }
+  vis.forEach(x=>{
+    g.strokeStyle=x[2]; g.fillStyle=x[2]; g.lineWidth=1; g.setLineDash(x[0]==='強平'?[2,3]:[6,3]);
+    g.beginPath(); g.moveTo(padL,Y(x[1])); g.lineTo(W-padR,Y(x[1])); g.stroke(); g.setLineDash([]);
+    g.font='11px sans-serif'; g.fillText(x[0]+' '+fmt(x[1]),W-padR+3,Y(x[1])+4);
+  });
+}
+function simKClose(){ simKX=null; $('simk').style.display='none'; }
+function simOpenModal(){ $('simmodal').style.display='flex'; $('simmodal').scrollTop=0; simRender(true); simTick(); }
+async function simInit(){
+  SIM=simNorm(await simLoadState());
+  if(SIM.weights&&WK.every(k=>typeof SIM.weights[k]==='number')) RW=Object.assign({},SIM.weights); else SIM.weights=null;
+  RESONLY=SIM.cfg.resOnly!==false; TOPN=SIM.cfg.topN||10; $('resonly').checked=RESONLY; $('resn').textContent=TOPN;
+  $('resonly').onchange=()=>{ RESONLY=$('resonly').checked; SIM.cfg.resOnly=RESONLY; simSave(); if(scanS) renderScan(scanS); };
+  $('simbtn').onclick=simOpenModal;
+  $('simclose').onclick=()=>{ $('simmodal').style.display='none'; simKClose(); };
+  $('simkclose').onclick=simKClose;
+  simBuild(); setInterval(simTick,5000);
+}
+
+simInit();
+
+/* ---------- 手機用:提醒音/震動、螢幕保持亮著、連線檢查 ---------- */
+let AC=null;
+function unlockAudio(){ try{ if(!AC){ const C=window.AudioContext||window.webkitAudioContext; if(C) AC=new C(); } if(AC&&AC.state==='suspended') AC.resume(); }catch(e){} }
+document.addEventListener('pointerdown',unlockAudio,{passive:true});
+function buzz(){
+  if(!$('snd').checked) return;
+  try{ if(navigator.vibrate) navigator.vibrate([200,100,200,100,200]); }catch(e){}
+  try{
+    if(!AC) return;
+    [0,0.22,0.44].forEach((t,i)=>{
+      const o=AC.createOscillator(), g=AC.createGain(); o.frequency.value=i===2?1175:880; o.type='sine';
+      g.gain.setValueAtTime(0.0001,AC.currentTime+t); g.gain.exponentialRampToValueAtTime(0.25,AC.currentTime+t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+t+0.18);
+      o.connect(g); g.connect(AC.destination); o.start(AC.currentTime+t); o.stop(AC.currentTime+t+0.2);
+    });
+  }catch(e){}
+}
+let wl=null;
+async function applyAwake(){
+  try{
+    if($('awake').checked && !document.hidden && 'wakeLock' in navigator){ if(!wl){ wl=await navigator.wakeLock.request('screen'); wl.addEventListener('release',()=>{ wl=null; }); } }
+    else if(wl){ await wl.release(); wl=null; }
+  }catch(e){ wl=null; }
+}
+$('awake').checked=LS.get('mtf_awake','1')==='1'; $('snd').checked=LS.get('mtf_snd','1')==='1';
+$('awake').onchange=()=>{ LS.set('mtf_awake',$('awake').checked?'1':'0'); applyAwake(); };
+$('snd').onchange=()=>{ LS.set('mtf_snd',$('snd').checked?'1':'0'); if($('snd').checked){ unlockAudio(); buzz(); } };
+document.addEventListener('visibilitychange',applyAwake);
+document.addEventListener('pointerdown',applyAwake,{once:true,passive:true});
+applyAwake();
+$('chk').onclick=async()=>{ $('conn').textContent='檢查中…'; $('conn').textContent=(await checkConn()).join('\n'); };
+</script></body></html>
