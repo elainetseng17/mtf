@@ -822,7 +822,7 @@ const busySince={sig:0,price:0,pin:0};
 function watch(k,flag){ if(flag){ if(!busySince[k]) busySince[k]=Date.now(); else if(Date.now()-busySince[k]>60000){ busySince[k]=0; return false; } } else busySince[k]=0; return flag; }
 const errMsg=e=>(e&&e.message)||String(e);
 async function signalTick(){
-  if(watch('sig',sigBusy)||!Core.symbol) return;
+  if(document.hidden||watch('sig',sigBusy)||!Core.symbol) return;
   const ver=Core.version, sym=Core.symbol, ex=EXCH[Core.ex], now=nowSec();
   if(!(ver!==sigSeen||now-sigLast>=30||Math.floor((now-2)/300)>Math.floor((sigLast-2)/300))) return;
   sigBusy=true;
@@ -835,7 +835,7 @@ async function signalTick(){
   finally{ sigLast=nowSec(); sigSeen=ver; sigBusy=false; }
 }
 async function priceTick(){
-  if(watch('price',priceBusy)||!Core.symbol) return;
+  if(document.hidden||watch('price',priceBusy)||!Core.symbol) return;
   priceBusy=true;
   const ver=Core.version, sym=Core.symbol;
   try{
@@ -850,7 +850,7 @@ async function priceTick(){
 }
 const pinSig={};
 async function pinTick(){
-  if(watch('pin',pinBusy)) return; pinBusy=true;
+  if(document.hidden||watch('pin',pinBusy)) return; pinBusy=true;
   try{
     const exk=Core.pinEx, ex=EXCH[exk];
     for(const sym of Core.pins.slice()){
@@ -876,7 +876,13 @@ setInterval(signalTick,700);
 setInterval(priceTick,2000);
 setInterval(pinTick,2000);
 setInterval(()=>{ if(KCACHE.size>1500) KCACHE.clear(); },60000);
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ sigLast=0; kick(); } });
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){
+    sigLast=0; kick(); pollPins();
+    if(tab==='scan') pollScan();
+    else if(tab==='monitor') tick();
+  }
+});
 
 /* ---------- 連線檢查:看看這台手機的瀏覽器連不連得到交易所 ---------- */
 async function checkConn(){
@@ -1025,7 +1031,7 @@ function alertNew(msg){
   setTimeout(()=>{ if(Date.now()>=alertUntil) b.style.display='none'; },15500);
 }
 function lampKey(sym,t){ return EX+':'+sym+':'+t; }
-function pollPins(){ try{ renderPins(Core.pinsSnapshot(EX).pins); }catch(e){} }
+function pollPins(){ if(document.hidden) return; try{ renderPins(Core.pinsSnapshot(EX).pins); }catch(e){} }
 function renderPins(arr){
   pinsData=arr;
   const box=$('pins'); box.textContent='';
@@ -1244,13 +1250,15 @@ function nearCard(r){
   return c;
 }
 function fillList(box,arr,maker,emptyMsg){
+  const sig = arr.length
+    ? arr.map(r => [r.symbol||'', r.side||'', r.state||'', r.price!=null?r.price:'', r.entry!=null?r.entry:'', r.rr!=null?Number(r.rr).toFixed(2):'', r.phase||''].join('~')).join('|')
+    : ('__EMPTY__:' + emptyMsg);
+  if(box._sig===sig) return;
+  box._sig=sig;
   const nodes=[];
   if(!arr.length) nodes.push(mk('div','empty',emptyMsg));
   else arr.forEach((r,i)=>nodes.push(maker(r,i)));
-  const t=document.createElement('div'); nodes.forEach(n=>t.appendChild(n));
-  if(box._h===t.innerHTML) return;            /* 內容沒變就不重畫,避免打斷捲動 */
-  box._h=t.innerHTML;
-  setKids(box,Array.from(t.childNodes));
+  setKids(box,nodes);
 }
 function renderScan(s){
   scanS=s;
@@ -1275,7 +1283,7 @@ function renderScan(s){
   const none = s.status==='running' ? '掃描中,找到的會即時出現在這裡…' : (key==='rank' ? '目前前100名中沒有「5m/15m/1h同向且評分≥30」的幣種。可切換「依盈虧比」或「依成交額」查看單級別訊號。' : '目前沒有符合條件的幣種。保守型條件本來就少,可換進場級別、或調低最低成交額再試。');
   fillList($('hits'),hits,hitCard,none);
   fillList($('near'),near,nearCard,s.status==='running' ? '掃描中…' : '目前沒有。');
-  if($('auto').checked && s.status==='done' && s.age>180 && Date.now()-lastStart>10000) startScan();
+  if($('auto').checked && s.status==='done' && s.age>180 && Date.now()-lastStart>15000 && !document.hidden) startScan();
 }
 
 /* ---------- 圖表視窗(可拖曳/縮放) ---------- */
@@ -1515,7 +1523,7 @@ $('syminp').addEventListener('keydown',e=>{ if(e.key==='Enter') $('symgo').click
 document.querySelectorAll('#tabs button').forEach(b=>{ b.onclick=()=>setTab(b.dataset.tab); });
 window.addEventListener('resize',()=>{ if(lastState) drawChart(lastState); });
 mkExButtons(); mkTfButtons(); setTab(tab); pollPins(); setInterval(pollPins,2000);
-setInterval(()=>{ if(tab==='monitor') tick(); else if(tab==='scan') pollScan(); },1000);
+setInterval(()=>{ if(document.hidden) return; if(tab==='monitor') tick(); else if(tab==='scan') pollScan(); },1200);
 setInterval(()=>{ if(tab==='market') loadMarket(false); },60000);
 
 /* ---------- 綜合排名 ---------- */
@@ -1714,7 +1722,7 @@ async function simTick(){
     if(SIM.running){
       if(!scanS||scanS.status==='idle'){ if(Date.now()-lastStart>10000) startScan(); }
       else if(scanS.status==='done'&&scanS.age>180&&Date.now()-lastStart>10000) startScan();
-      if(tab!=='scan') pollScan();
+      /* background scan state already updated */
     }
     const need=new Set(SIM.pos.map(p=>p.ex));
     if(SIM.running&&scanS&&scanS.status==='done'&&SIM.pos.length<SIM.cfg.maxPos) need.add(scanS.ex);
@@ -2205,3 +2213,173 @@ function simDrawK(){
 function simKClose(){ simKX=null; $('simk').style.display='none'; }
 function simOpenModal(){ $('simmodal').style.display='flex'; $('simmodal').scrollTop=0; simRender(true); simTick(); }
 async function simInit(){
+  SIM=simNorm(await simLoadState());
+  if(SIM.weights&&SIM.weights.rr!=null) RW=SIM.weights;
+  $('simbtn').onclick=simOpenModal;
+  $('simclose').onclick=()=>{ $('simmodal').style.display='none'; simKClose(); };
+  $('simkclose').onclick=simKClose;
+  getDeviceId();
+  simBuild();
+  syncTradesToCloud(false);
+  setInterval(simTick,5000);
+  setInterval(()=>syncTradesToCloud(false), 30000);
+}
+
+
+/* ---------- 跨裝置模擬交易收集與全網檢討 ---------- */
+const COLLECTOR_URL = 'https://mtf-sim-collector.elainetseng17.workers.dev';
+const DEVICE_ID_KEY = 'mtf_device_id';
+const UPLOADED_KEY = 'mtf_uploaded_trade_keys';
+let simRevScope = 'local'; // 'local' | 'global'
+let simGlobalTrades = null;
+let simGlobalLoading = false;
+let simGlobalErr = '';
+let simGlobalDevices = 0;
+
+let _memDevId = '';
+function getDeviceId(){
+  if(_memDevId) return _memDevId;
+  let id = '';
+  try{ id = localStorage.getItem(DEVICE_ID_KEY) || ''; }catch(e){}
+  if(!id){
+    id = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    try{ localStorage.setItem(DEVICE_ID_KEY, id); }catch(e){}
+  }
+  _memDevId = id;
+  return id;
+}
+
+function tradeUniqueKey(t){
+  return [getDeviceId(), t.sym || '', t.openT || 0, t.closeT || 0].join('|');
+}
+
+function getUploadedSet(){
+  try{
+    const arr = JSON.parse(localStorage.getItem(UPLOADED_KEY) || '[]');
+    return new Set(Array.isArray(arr) ? arr : []);
+  }catch(e){ return new Set(); }
+}
+
+function markUploadedKeys(keys){
+  try{
+    const s = getUploadedSet();
+    keys.forEach(k => s.add(k));
+    const trimmed = Array.from(s).slice(-2000);
+    localStorage.setItem(UPLOADED_KEY, JSON.stringify(trimmed));
+  }catch(e){}
+}
+
+function collectLocalClosedTrades(){
+  if(!SIM) return [];
+  const all = [].concat(SIM.closed || []);
+  for(const h of (SIM.history || [])){
+    if(h && Array.isArray(h.trades)) all.push(...h.trades);
+  }
+  return all;
+}
+
+async function syncTradesToCloud(forceAll){
+  if(!COLLECTOR_URL || !SIM) return;
+  const all = collectLocalClosedTrades();
+  if(!all.length) return;
+  const uploaded = getUploadedSet();
+  const pending = forceAll ? all : all.filter(t => !uploaded.has(tradeUniqueKey(t)));
+  if(!pending.length) return;
+  try{
+    const resp = await fetch(COLLECTOR_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_id: getDeviceId(),
+        trades: pending.slice(0, 200)
+      })
+    });
+    if(resp.ok){
+      markUploadedKeys(pending.slice(0, 200).map(tradeUniqueKey));
+      if(simRevScope === 'global') fetchGlobalTrades(true);
+    }
+  }catch(e){}
+}
+
+async function fetchGlobalTrades(force){
+  if(!COLLECTOR_URL) return;
+  if(simGlobalLoading) return;
+  if(!force && simGlobalTrades) return;
+  simGlobalLoading = true;
+  simGlobalErr = '';
+  if($('simmodal').style.display !== 'none' && simView === 'rev') simRenderRev();
+  try{
+    const resp = await fetch(COLLECTOR_URL + '/trades?limit=2000', { cache: 'no-store' });
+    const data = await resp.json();
+    if(!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    const rows = Array.isArray(data.trades) ? data.trades : [];
+    const devSet = new Set();
+    simGlobalTrades = rows.map(r => {
+      if(r.device_id) devSet.add(r.device_id);
+      const raw = (r.raw_json && typeof r.raw_json === 'object') ? r.raw_json : {};
+      return Object.assign({}, raw, {
+        sid: r.session_id != null ? r.session_id : raw.sid,
+        ex: r.ex != null ? r.ex : raw.ex,
+        sym: r.sym || raw.sym,
+        side: r.side || raw.side,
+        lev: r.lev != null ? Number(r.lev) : raw.lev,
+        marginMode: r.margin_mode || raw.marginMode,
+        tf: r.tf || raw.tf,
+        entry: r.entry != null ? Number(r.entry) : raw.entry,
+        exit: r.exit_price != null ? Number(r.exit_price) : raw.exit,
+        sl: r.sl != null ? Number(r.sl) : raw.sl,
+        tp: r.tp != null ? Number(r.tp) : raw.tp,
+        liq: r.liq != null ? Number(r.liq) : raw.liq,
+        pnl: r.pnl != null ? Number(r.pnl) : Number(raw.pnl || 0),
+        margin: r.margin != null ? Number(r.margin) : raw.margin,
+        reason: r.reason || raw.reason,
+        score: r.score != null ? Number(r.score) : raw.score,
+        rr: r.rr != null ? Number(r.rr) : raw.rr,
+        openT: r.open_t != null ? Number(r.open_t) : Number(raw.openT || 0),
+        closeT: r.close_t != null ? Number(r.close_t) : Number(raw.closeT || 0),
+        _deviceId: r.device_id || ''
+      });
+    });
+    simGlobalDevices = devSet.size;
+  }catch(e){
+    simGlobalErr = '全網資料讀取失敗: ' + (e && e.message || e);
+  }finally{
+    simGlobalLoading = false;
+    if($('simmodal').style.display !== 'none' && simView === 'rev') simRenderRev();
+  }
+}
+
+simInit();
+
+/* ---------- 手機用:提醒音/震動、螢幕保持亮著、連線檢查 ---------- */
+let AC=null;
+function unlockAudio(){ try{ if(!AC){ const C=window.AudioContext||window.webkitAudioContext; if(C) AC=new C(); } if(AC&&AC.state==='suspended') AC.resume(); }catch(e){} }
+document.addEventListener('pointerdown',unlockAudio,{passive:true});
+function buzz(){
+  if(!$('snd').checked) return;
+  try{ if(navigator.vibrate) navigator.vibrate([200,100,200,100,200]); }catch(e){}
+  try{
+    if(!AC) return;
+    [0,0.22,0.44].forEach((t,i)=>{
+      const o=AC.createOscillator(), g=AC.createGain(); o.frequency.value=i===2?1175:880; o.type='sine';
+      g.gain.setValueAtTime(0.0001,AC.currentTime+t); g.gain.exponentialRampToValueAtTime(0.25,AC.currentTime+t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+t+0.18);
+      o.connect(g); g.connect(AC.destination); o.start(AC.currentTime+t); o.stop(AC.currentTime+t+0.2);
+    });
+  }catch(e){}
+}
+let wl=null;
+async function applyAwake(){
+  try{
+    if($('awake').checked && !document.hidden && 'wakeLock' in navigator){ if(!wl){ wl=await navigator.wakeLock.request('screen'); wl.addEventListener('release',()=>{ wl=null; }); } }
+    else if(wl){ await wl.release(); wl=null; }
+  }catch(e){ wl=null; }
+}
+$('awake').checked=LS.get('mtf_awake','1')==='1'; $('snd').checked=LS.get('mtf_snd','1')==='1';
+$('awake').onchange=()=>{ LS.set('mtf_awake',$('awake').checked?'1':'0'); applyAwake(); };
+$('snd').onchange=()=>{ LS.set('mtf_snd',$('snd').checked?'1':'0'); if($('snd').checked){ unlockAudio(); buzz(); } };
+document.addEventListener('visibilitychange',applyAwake);
+document.addEventListener('pointerdown',applyAwake,{once:true,passive:true});
+applyAwake();
+$('chk').onclick=async()=>{ $('conn').textContent='檢查中…'; $('conn').textContent=(await checkConn()).join('\n'); };
+</script></body></html>
